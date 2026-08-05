@@ -8,6 +8,7 @@
 **/.gitlog
 **/.git-*
 **/.idea
+.claude/
 **/build
 **/managed_components
 **/dependencies.lock
