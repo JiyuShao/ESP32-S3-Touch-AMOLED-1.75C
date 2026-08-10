@@ -9,7 +9,10 @@
 **/.git-*
 **/.idea
 .DS_Store
-.claude/
+# Keep only shared project settings under version control. Local sessions,
+# worktrees, cache, and credentials remain private to each developer.
+.claude/*
+!.claude/settings.json
 **/build
 **/managed_components
 **/dependencies.lock
