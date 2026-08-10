@@ -8,6 +8,7 @@
 **/.gitlog
 **/.git-*
 **/.idea
+.DS_Store
 .claude/
 **/build
 **/managed_components
