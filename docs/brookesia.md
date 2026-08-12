@@ -1,11 +1,14 @@
-# Brookesia
+# ESP-Brookesia
 
-`examples/esp-idf/03_esp-brookesia/` is treated as a source-maintained rich UI example and is included in ESP-IDF CI.
+This repository contains two related ESP-Brookesia examples:
 
-Brookesia compatibility should be checked through CI before updating shared UI, LVGL, display, touch, or audio dependencies. If a future upstream Brookesia release changes the supported ESP-IDF range, update the example manifests and this note together.
+- [`03_esp-brookesia`](../examples/esp-idf/03_esp-brookesia/) — the source-maintained rich UI example retained for compatibility and CI coverage.
+- [`99_esp-brookesia`](../examples/esp-idf/99_esp-brookesia/) — the **Brookesia App Platform** baseline for developing and running additional statically bundled Phone Apps on the current board.
+
+For the current 99 architecture, canonical vocabulary, lifecycle boundaries, data flows, constraints, known defects, and undecided product policies, see [99 ESP-Brookesia Architecture](architecture/99-esp-brookesia.md) and the repository [domain glossary](../CONTEXT.md).
 
 ## Runtime Notes
 
-The Brookesia and rich LVGL examples use the ESP-IDF v6-compatible LVGL/Brookesia custom memory path. Keep `CONFIG_LV_MEM_CUSTOM` and `CONFIG_ESP_BROOKESIA_MEMORY_USE_CUSTOM` enabled unless the examples are re-tested on hardware across both ESP-IDF CI versions.
+Brookesia examples depend on the repository's selected ESP-IDF, LVGL, display, touch, and board-support component versions. Check the example manifests and CI before changing shared UI or hardware dependencies.
 
-`examples/esp-idf/03_esp-brookesia/` remains in CI for compile and artifact coverage. Runtime issues such as display, touch, PMU, or sensor initialization still need board-level verification after CI is green.
+Both examples still require board-level verification for display, touch, memory, and other hardware behavior after a successful build. Factory recovery binaries under [`Firmware/`](../Firmware/) are separate from these source examples and CI-generated release firmware; see [Firmware Artifacts](firmware.md).
