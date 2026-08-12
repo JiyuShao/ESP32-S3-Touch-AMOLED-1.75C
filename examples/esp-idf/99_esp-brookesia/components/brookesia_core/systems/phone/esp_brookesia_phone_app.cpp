@@ -41,13 +41,8 @@ App::App(const char *name, const void *launcher_icon, bool use_default_screen):
 App::~App()
 {
     ESP_UTILS_LOGD("Destroy(@0x%p)", this);
-
-    // Uninstall the app if it is initialized
-    if (checkInitialized()) {
-        if (!getSystem()->getManager().uninstallApp(this)) {
-            ESP_UTILS_LOGE("Uninstall app failed");
-        }
-    }
+    // App destructor only cleans up its own resources.
+    // Uninstall must be done explicitly by the Manager before destruction.
 }
 
 bool App::setStatusIconState(int state)

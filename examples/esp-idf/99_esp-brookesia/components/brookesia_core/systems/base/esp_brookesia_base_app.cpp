@@ -353,11 +353,11 @@ bool App::processInstall(Context *system_context, int id)
         false, "Calibrate screen size failed"
     );
     _system_context = system_context;
-    _id = id;
 
     ESP_UTILS_CHECK_FALSE_GOTO(beginExtra(), err, "Begin extra failed");
     ESP_UTILS_CHECK_FALSE_GOTO(init(), err, "Init failed");
 
+    _id = id;
     _status = Status::CLOSED;
 
     return true;
@@ -500,6 +500,10 @@ bool App::processClose(bool is_app_active)
     ESP_UTILS_LOGD("App(%s: %d) close", getName(), _id);
 
     // Prevent recursive close
+    if (_flags.is_closing) {
+        ESP_UTILS_LOGW("App(%s: %d) already closing, skip", getName(), _id);
+        return true;
+    }
     _flags.is_closing = true;
 
     ESP_UTILS_LOGD("Do close");
@@ -522,6 +526,34 @@ bool App::processClose(bool is_app_active)
             ESP_UTILS_CHECK_FALSE_GOTO(cleanDefaultScreen(), err, "Clean active screen failed");
         }
     }
+
+    // For active close, defer status commit until after screen switch + cleanup completes.
+    // The caller must invoke processCloseFinalize() after the screen transition.
+    if (!is_app_active) {
+        ESP_UTILS_CHECK_FALSE_GOTO(loadDisplayTheme(), err, "Load display theme failed");
+        _flags.is_closing = false;
+        _status = Status::CLOSED;
+    }
+
+    return true;
+
+err:
+    _flags.is_closing = false;
+
+    return false;
+}
+
+bool App::processCloseFinalize(void)
+{
+    ESP_UTILS_CHECK_FALSE_RETURN(checkInitialized(), false, "Not initialized");
+    ESP_UTILS_LOGD("App(%s: %d) close finalize", getName(), _id);
+
+    // Guard: only finalize if pre-commit (processClose) was invoked
+    if (!_flags.is_closing) {
+        ESP_UTILS_LOGW("App(%s: %d) close finalize skipped — not in closing state", getName(), _id);
+        return true;
+    }
+
     ESP_UTILS_CHECK_FALSE_GOTO(loadDisplayTheme(), err, "Load display theme failed");
 
     _flags.is_closing = false;
@@ -530,8 +562,9 @@ bool App::processClose(bool is_app_active)
     return true;
 
 err:
+    ESP_UTILS_LOGE("App(%s: %d) close finalize failed — teardown fault", getName(), _id);
     _flags.is_closing = false;
-
+    _status = Status::CLOSED;  // best-effort: commit status even on fault
     return false;
 }
 
@@ -760,7 +793,7 @@ bool App::saveAppTheme(void)
 bool App::loadAppTheme(void)
 {
     lv_display_t *display = nullptr;
-    lv_theme_t *&theme = _display_style.theme;
+    lv_theme_t *&theme = _app_style.theme;
 
     ESP_UTILS_CHECK_FALSE_RETURN(checkInitialized(), false, "Not initialized");
     ESP_UTILS_LOGD("App(%s: %d) load app theme", getName(), _id);

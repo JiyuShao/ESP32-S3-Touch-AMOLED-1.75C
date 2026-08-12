@@ -36,6 +36,7 @@ Manager::~Manager()
 int Manager::installApp(App *app)
 {
     bool app_installed = false;
+    bool app_inserted = false;
     bool display_process_app_installed = false;
     lv_area_t app_visual_area = {};
     Display &display = _system_context.getDisplay();
@@ -54,6 +55,7 @@ int Manager::installApp(App *app)
     // Insert app to installed_app_map
     ESP_UTILS_CHECK_FALSE_GOTO(_id_installed_app_map.insert(pair <int, App *>(app->_id, app)).second, err,
                                "Insert app failed");
+    app_inserted = true;
 
     ESP_UTILS_CHECK_FALSE_GOTO(display.getAppVisualArea(app, app_visual_area), err, "Display get app visual area failed");
     ESP_UTILS_CHECK_FALSE_GOTO(app->setVisualArea(app_visual_area), err, "App set visual area failed");
@@ -69,13 +71,17 @@ int Manager::installApp(App *app)
     return app->getId();
 
 err:
+    int erase_id = app->_id;  // stash before processUninstall resets to -1
+
     if (display_process_app_installed && !display.processAppUninstall(app)) {
         ESP_UTILS_LOGE("Display process app uninstall failed");
     }
     if (app_installed && !app->processUninstall()) {
         ESP_UTILS_LOGE("App uninstall failed");
     }
-    _id_installed_app_map.erase(app->_id);
+    if (app_inserted) {
+        _id_installed_app_map.erase(erase_id);
+    }
 
     return -1;
 }
@@ -95,6 +101,13 @@ int Manager::uninstallApp(App *app)
     app_id = app->_id;
 
     ESP_UTILS_LOGD("Uninstall App(%d)", app_id);
+
+    // Guard: only CLOSED apps can be uninstalled
+    if (app->_status != App::Status::CLOSED) {
+        ESP_UTILS_LOGE("App(%d: %s) must be CLOSED before uninstall, current status=%d",
+                       app_id, app->getName(), (int)app->_status);
+        return false;
+    }
 
     // Check if the app is already installed
     auto it = _id_installed_app_map.begin();
@@ -191,21 +204,27 @@ bool Manager::installAppFromRegistry(std::vector<RegistryAppInfo> &app_infos, st
     }
 
     // Install apps
+    int success_count = 0;
+    int fail_count = 0;
     for (auto &[name, app] : app_infos) {
         ESP_UTILS_LOGI("Install app: %s", name.c_str());
 
         auto app_id = installApp(app.get());
         if (!checkAppID_Valid(app_id)) {
-            ESP_UTILS_LOGE("\t - Install failed");
-        }
-        ESP_UTILS_LOGI("\t - Install success (id: %d)", app_id);
+            ESP_UTILS_LOGE("\t - Install failed (id: %d)", app_id);
+            fail_count++;
+        } else {
+            ESP_UTILS_LOGI("\t - Install success (id: %d)", app_id);
+            success_count++;
 
-        if (ordered_app_names != nullptr) {
-            ordered_app_names->emplace_back(name);
+            if (ordered_app_names != nullptr) {
+                ordered_app_names->emplace_back(name);
+            }
         }
     }
 
-    return true;
+    ESP_UTILS_LOGI("Registry install complete: %d succeeded, %d failed", success_count, fail_count);
+    return fail_count == 0;
 }
 
 bool Manager::startApp(int id)
@@ -288,6 +307,8 @@ err:
         ESP_UTILS_LOGE("App process close failed");
     }
     ESP_UTILS_CHECK_FALSE_RETURN(display.processMainScreenLoad(), false, "Display load main screen failed");
+    // Finalize close after screen switch triggers cleanup callback
+    app->processCloseFinalize();
 
     return false;
 }
@@ -356,8 +377,10 @@ bool Manager::processAppClose(App *app)
     ESP_UTILS_CHECK_NULL_RETURN(app, false, "Invalid app");
     ESP_UTILS_LOGD("Process app(%d) close", app->_id);
 
-    // Process app, enable auto clean when the app is showing
-    ESP_UTILS_CHECK_FALSE_RETURN(app->processClose(_active_app == app), false, "App process close failed");
+    bool is_active = (_active_app == app);
+
+    // Pre-commit: close(), saveRecentScreen, enableAutoClean — reversible on failure
+    ESP_UTILS_CHECK_FALSE_RETURN(app->processClose(is_active), false, "App process close failed");
     if (_core_data.flags.enable_app_save_snapshot) {
         if (!releaseAppSnapshot(app)) {
             ESP_UTILS_LOGE("Release app snapshot failed");
@@ -367,8 +390,13 @@ bool Manager::processAppClose(App *app)
     // Process display, load main screen if the app is showing
     ESP_UTILS_CHECK_FALSE_RETURN(display.processAppClose(app), false, "Display process close failed");
 
-    // Process extra
-    ESP_UTILS_CHECK_FALSE_RETURN(processAppCloseExtra(app), false, "Process app pause extra failed");
+    // Process extra — screen switch triggers auto-clean callback synchronously
+    ESP_UTILS_CHECK_FALSE_RETURN(processAppCloseExtra(app), false, "Process app close extra failed");
+
+    // Post-commit: finalize status after cleanup succeeds
+    if (is_active) {
+        ESP_UTILS_CHECK_FALSE_RETURN(app->processCloseFinalize(), false, "App process close finalize failed");
+    }
 
     // Remove app from running map and update active app
     ESP_UTILS_CHECK_FALSE_RETURN(_id_running_app_map.erase(app->_id) > 0, false, "Remove app from running map failed");
@@ -408,22 +436,29 @@ bool Manager::saveAppSnapshot(App *app)
 
     auto it = _id_app_snapshot_map.find(app->_id);
     auto color_format = _system_context.getDisplayDevice()->color_format;
-    snapshot_buffer = (it != _id_app_snapshot_map.end()) ? it->second : nullptr;
+    lv_draw_buf_t *old_buffer = (it != _id_app_snapshot_map.end()) ? it->second : nullptr;
 
-    if ((snapshot_buffer == nullptr) || (snapshot_buffer->header.w != lv_area_get_width(&app_screen_area)) ||
-            (snapshot_buffer->header.h != lv_area_get_height(&app_screen_area))) {
-        if (snapshot_buffer != nullptr) {
-            lv_draw_buf_destroy(snapshot_buffer);
-        }
+    // Allocate or reuse buffer — never destroy old until new is committed
+    bool need_new_buffer = (old_buffer == nullptr) ||
+                           (old_buffer->header.w != lv_area_get_width(&app_screen_area)) ||
+                           (old_buffer->header.h != lv_area_get_height(&app_screen_area));
+
+    if (need_new_buffer) {
         snapshot_buffer = lv_snapshot_create_draw_buf(app->_active_screen, color_format);
         ESP_UTILS_CHECK_NULL_GOTO(snapshot_buffer, err, "Create snapshot buffer failed");
+    } else {
+        snapshot_buffer = old_buffer;  // reuse same-size buffer
     }
 
-    // And take snapshot for recent screen
+    // Take snapshot into candidate buffer
     ret = lv_snapshot_take_to_draw_buf(app->_active_screen, color_format, snapshot_buffer);
     ESP_UTILS_CHECK_FALSE_GOTO(ret == LV_RESULT_OK, err, "Take snapshot fail");
 
+    // Commit: atomically swap into map, then destroy old
     _id_app_snapshot_map[app->_id] = snapshot_buffer;
+    if (need_new_buffer && old_buffer != nullptr) {
+        lv_draw_buf_destroy(old_buffer);
+    }
     if (resize_app_screen) {
         app->_active_screen->coords = app_screen_area;
     }
@@ -431,7 +466,8 @@ bool Manager::saveAppSnapshot(App *app)
     return true;
 
 err:
-    if (snapshot_buffer != nullptr) {
+    // Only destroy candidate buffer we created; never touch old buffer still in map
+    if (need_new_buffer && snapshot_buffer != nullptr) {
         lv_draw_buf_destroy(snapshot_buffer);
     }
     if (resize_app_screen) {
@@ -571,6 +607,12 @@ bool Manager::del(void)
     }
     _id_installed_app_map.clear();
     _id_running_app_map.clear();
+    // Release all snapshot buffers before clearing the map
+    for (auto &[id, buf] : _id_app_snapshot_map) {
+        if (buf != nullptr) {
+            lv_draw_buf_destroy(buf);
+        }
+    }
     _id_app_snapshot_map.clear();
 
     return ret;

@@ -411,6 +411,7 @@ private:
     virtual bool processResume(void);
     virtual bool processPause(void);
     virtual bool processClose(bool is_app_active);
+    bool processCloseFinalize(void);
 
     bool setVisualArea(const lv_area_t &area);
     bool calibrateVisualArea(void);
