@@ -1,0 +1,11 @@
+--- a/esp32_s3_touch_amoled_1_75c.c
++++ b/esp32_s3_touch_amoled_1_75c.c
+@@ -474,7 +474,7 @@
+             .hor_res = BSP_LCD_H_RES,
+             .ver_res = BSP_LCD_V_RES,
+             .buffer_height = 50,
+-            .use_psram = true,
++            .use_psram = false,
+             .enable_ppa_accel = false,
+             .require_double_buffer = true,
+         },
