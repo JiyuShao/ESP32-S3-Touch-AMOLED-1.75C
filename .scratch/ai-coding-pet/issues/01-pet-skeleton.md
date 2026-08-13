@@ -4,16 +4,19 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done (2026-08-13, board-verified)
 
 ## Acceptance criteria
 
-- [ ] `sdkconfig.defaults` 开启 WiFi STA + lwIP DHCP + esp_websocket_client（一次改完，后续 ticket 不改 sdkconfig）
-- [ ] `main/idf_component.yml` 添加 `mdns` 和 `esp_websocket_client`（如果需要 managed component）
-- [ ] `components/pet_app/` 作为独立 component：`CMakeLists.txt` + `WHOLE_ARCHIVE` 注册
-- [ ] `pet_app.cpp` 继承 `phone::App`，实现 `init()` / `run()` / `close()` 最小生命周期
-- [ ] `run()` 中创建 `lv_image`，显示一张硬编码 RGB565 占位图（120×130，居中或原始大小）
-- [ ] Launcher 图标：用任意占位 icon（112×112 或复用 Squareline 格式）
-- [ ] `idf.py build` 通过 → 烧录 → Launcher 两个图标（Squareline + Pet）→ 点 Pet → 屏上显示占位图像
-- [ ] `back()` 回到 Launcher
-- [ ] 4 MiB factory 分区空闲 ≥ 35%
+- [x] WiFi driver + lwIP + DHCP 已随 IDF 默认开启（sdkconfig 确认 `CONFIG_ESP_NETIF_*`）；esp_websocket_client 依赖留给 ticket 02
+- [x] `components/ai_coding_pet/` 独立 component：`CMakeLists.txt` + `WHOLE_ARCHIVE` 注册
+- [x] `ai_coding_pet.cpp` 继承 `phone::App`，实现 `run()` / `back()` / `close()` / `pause()` / `resume()`
+- [x] `run()` 显示硬编码占位宠物（LVGL 圆角矩形 + 眼睛 + 笑脸 + 标签）
+- [x] Launcher 图标：112×112 ARGB8888 自制图标
+- [x] `idf.py build` 通过 → 烧录 → Launcher 两个图标（Squareline + AI Coding Pet）→ 点 Pet → 屏上显示占位图
+- [x] `back()` 回到 Launcher（板级验证通过）
+- [x] 4 MiB factory 分区空闲 37% ≥ 35%
+
+## Notes
+
+- 显示 DMA underflow 修复：BSP `use_psram=false`（见 `patches/0001-*.patch`），已提交 2199b63

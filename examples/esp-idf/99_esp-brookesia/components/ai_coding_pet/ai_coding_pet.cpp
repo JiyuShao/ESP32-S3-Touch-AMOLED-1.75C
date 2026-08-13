@@ -43,9 +43,14 @@ void AiCodingPet::tickTimerCb(lv_timer_t *t)
     uint32_t now = lv_tick_get();
     self->_bridge.tick(now);
     self->_renderer.tick(now);
-    if (self->_rendered_state != self->_bridge.status().state) {
-        self->_rendered_state = self->_bridge.status().state;
-        self->_renderer.playState(self->_rendered_state);
+    self->pollState();
+}
+
+void AiCodingPet::pollState(void)
+{
+    if (_rendered_state != _bridge.status().state) {
+        _rendered_state = _bridge.status().state;
+        _renderer.playState(_rendered_state);
     }
 }
 
@@ -85,6 +90,11 @@ bool AiCodingPet::run(void)
     _renderer.init(lv_screen_active());
     _rendered_state = PET_STATE_DISCONNECTED; // matches init visual
 
+    if (!_intro_played) {
+        _intro_played = true; // ticket 05: waving intro on first run only
+        _renderer.playIntro();
+    }
+
     if (_tick_timer == nullptr) {
         _tick_timer = lv_timer_create(tickTimerCb, 150, this);
     }
@@ -106,6 +116,7 @@ bool AiCodingPet::close(void)
         lv_timer_delete(_tick_timer);
         _tick_timer = nullptr;
     }
+    _renderer.deinit(); // the shell keeps our screen; we own our LVGL objects
     if (_ws_started) {
         ws_client_stop();
         _ws_started = false;
@@ -116,12 +127,19 @@ bool AiCodingPet::close(void)
 bool AiCodingPet::pause(void)
 {
     ESP_UTILS_LOGD("Pause");
+    if (_tick_timer != nullptr) {
+        lv_timer_pause(_tick_timer);
+    }
     return true;
 }
 
 bool AiCodingPet::resume(void)
 {
     ESP_UTILS_LOGD("Resume");
+    if (_tick_timer != nullptr) {
+        lv_timer_resume(_tick_timer);
+    }
+    pollState(); // catch up immediately instead of waiting for the next tick
     return true;
 }
 

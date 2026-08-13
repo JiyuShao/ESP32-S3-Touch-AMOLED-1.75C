@@ -27,6 +27,10 @@ private:
     AgentState _rendered_state = PET_STATE_DISCONNECTED;
     lv_timer_t *_tick_timer = nullptr;
     bool _ws_started = false;
+    bool _intro_played = false; // waving intro plays once per boot
+
+    /** Push bridge state into the renderer on change. */
+    void pollState(void);
 
     /* WS callbacks run on the ws_client task — they only feed PetBridge
      * (no LVGL calls); the LVGL timer polls and updates the UI. */

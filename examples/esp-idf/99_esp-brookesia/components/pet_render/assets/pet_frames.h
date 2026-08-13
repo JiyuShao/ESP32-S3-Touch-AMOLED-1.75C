@@ -15,3 +15,4 @@ typedef struct {
 } pet_state_anim_t;
 
 extern const pet_state_anim_t pet_anims[PET_STATE_COUNT];
+extern const pet_state_anim_t pet_intro_anim; // waving row, one-shot
