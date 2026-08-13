@@ -7,6 +7,10 @@
 #include "bsp/esp-bsp.h"
 #include "esp_brookesia.hpp"
 #include "boost/thread.hpp"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "wifi_config.h"
 #ifdef ESP_UTILS_LOG_TAG
 #   undef ESP_UTILS_LOG_TAG
 #endif
@@ -20,9 +24,50 @@ using namespace esp_brookesia::systems::phone;
 constexpr bool EXAMPLE_SHOW_MEM_INFO = false;
 constexpr uint32_t LVGL_TASK_STACK_SIZE = 40 * 1024;
 
+static void wifi_connect_sta(void)
+{
+    esp_netif_init();
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+
+    wifi_config_t wifi_config = {};
+    strncpy((char *)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, WIFI_PASS, sizeof(wifi_config.sta.password) - 1);
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    ESP_UTILS_LOGI("Connecting to WiFi: %s", WIFI_SSID);
+
+    // Blocking wait for IPv4 (MVP; provisioning comes in a later ticket)
+    esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip_info = {};
+    for (int retry = 0; retry < 20; retry++) {
+        esp_netif_get_ip_info(sta_netif, &ip_info);
+        if (ip_info.ip.addr != 0) {
+            ESP_UTILS_LOGI("WiFi connected, IP: " IPSTR, IP2STR(&ip_info.ip));
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ESP_UTILS_LOGW("WiFi connect timeout (SSID/password not configured?); pet app will stay disconnected");
+}
+
 extern "C" void app_main(void)
 {
     ESP_UTILS_LOGI("Display ESP-Brookesia phone demo");
+
+    /* WiFi STA for the PC Bridge link (ticket 02). Connect first so the
+     * pet app can open its WebSocket as soon as it runs. */
+    esp_err_t nvs_ret = nvs_flash_init();
+    if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES || nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+    wifi_connect_sta();
 
     /* Brookesia screen creation exceeds the adapter's 8 KB default on this board. */
 #pragma GCC diagnostic push

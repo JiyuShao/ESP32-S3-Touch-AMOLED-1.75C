@@ -21,6 +21,7 @@ protected:
 private:
     static AiCodingPet *_instance;
     lv_obj_t *_pet_image = nullptr;
+    bool _ws_started = false;
 };
 
 } // namespace esp_brookesia::apps

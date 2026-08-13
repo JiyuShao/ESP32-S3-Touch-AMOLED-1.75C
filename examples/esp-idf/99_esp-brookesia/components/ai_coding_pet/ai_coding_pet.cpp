@@ -1,5 +1,8 @@
 #include "lvgl.h"
 #include "esp_brookesia.hpp"
+#include "cJSON.h"
+#include "pet_bridge_config.h"
+#include "ws_client.h"
 #ifdef ESP_UTILS_LOG_TAG
 #   undef ESP_UTILS_LOG_TAG
 #endif
@@ -18,6 +21,23 @@ LV_IMG_DECLARE(ai_coding_pet_icon_112_112);
 namespace esp_brookesia::apps {
 
 AiCodingPet *AiCodingPet::_instance = nullptr;
+
+/* WS text frame from the bridge: {"state":"thinking",...} — log the state. */
+static void ws_message_cb(const char *payload, int len, void *user_data)
+{
+    cJSON *root = cJSON_ParseWithLength(payload, len);
+    if (root == nullptr) {
+        ESP_UTILS_LOGW("WS bad JSON: %s", payload);
+        return;
+    }
+    cJSON *state = cJSON_GetObjectItem(root, "state");
+    if (cJSON_IsString(state)) {
+        ESP_UTILS_LOGI("state: %s", state->valuestring);
+    } else {
+        ESP_UTILS_LOGW("WS JSON has no state field: %s", payload);
+    }
+    cJSON_Delete(root);
+}
 
 AiCodingPet *AiCodingPet::requestInstance(bool use_status_bar, bool use_navigation_bar)
 {
@@ -39,6 +59,16 @@ AiCodingPet::~AiCodingPet()
 bool AiCodingPet::run(void)
 {
     ESP_UTILS_LOGD("Run");
+
+    /* WebSocket link to the PC Bridge (ticket 02). Auto-reconnects every 5 s. */
+    if (!_ws_started) {
+        ESP_UTILS_LOGI("Connecting WS: ws://%s:%d%s", PET_BRIDGE_IP, PET_BRIDGE_PORT, PET_BRIDGE_WS_PATH);
+        if (ws_client_start(PET_BRIDGE_IP, PET_BRIDGE_PORT, PET_BRIDGE_WS_PATH, ws_message_cb, this) != ESP_OK) {
+            ESP_UTILS_LOGE("WS client start failed");
+            return false;
+        }
+        _ws_started = true;
+    }
 
     // Create a placeholder pet image — a rounded rectangle with a label on it.
     // Full spritesheet rendering comes in ticket 03.
@@ -110,6 +140,10 @@ bool AiCodingPet::back(void)
 bool AiCodingPet::close(void)
 {
     ESP_UTILS_LOGD("Close");
+    if (_ws_started) {
+        ws_client_stop();
+        _ws_started = false;
+    }
     return true;
 }
 
