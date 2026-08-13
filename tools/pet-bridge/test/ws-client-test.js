@@ -1,7 +1,21 @@
 // Test WS client for bridge.js — raw net socket, RFC 6455 handshake + frame parse.
-// Connects, verifies replay of latest state, sends a ping, waits for a new POST push.
+// POSTs "thinking" (expect replay on connect), then after handshake+pong
+// POSTs "working" and expects the live push. Self-contained.
 const net = require('net');
+const http = require('http');
 const crypto = require('crypto');
+
+function post(state) {
+    const body = JSON.stringify({ state, session_id: 'test' });
+    const req = http.request({
+        host: '127.0.0.1', port: 8787, path: '/state', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, (res) => res.resume());
+    req.on('error', () => {});
+    req.end(body);
+}
+
+post('thinking'); // before connect → replayed on connect
 
 const key = crypto.randomBytes(16).toString('base64');
 const socket = net.connect(8787, '127.0.0.1', () => {
@@ -44,6 +58,7 @@ socket.on('data', (chunk) => {
         const masked = Buffer.from(pingPayload);
         for (let i = 0; i < masked.length; i++) masked[i] ^= mask[i & 3];
         socket.write(Buffer.concat([Buffer.from([0x89, 0x80 | pingPayload.length]), mask, masked]));
+        post('working'); // now that we're a registered client, expect the push
     }
 
     // Parse WS frames (server→client: unmasked)
