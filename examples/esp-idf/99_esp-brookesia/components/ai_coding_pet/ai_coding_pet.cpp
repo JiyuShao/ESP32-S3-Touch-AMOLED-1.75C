@@ -28,6 +28,15 @@ void AiCodingPet::wsMessageCb(const char *payload, int len, void *user_data)
     AiCodingPet *self = static_cast<AiCodingPet *>(user_data);
     if (!self->_bridge.onWsMessage(payload, len, lv_tick_get())) {
         ESP_UTILS_LOGW("WS bad state message: %.*s", len, payload);
+        return;
+    }
+    // dev verification of the session list; ticket 07 renders these in the UI
+    int n = 0;
+    const ::pet_bridge::SessionEntry *sess = self->_bridge.sessions(&n);
+    for (int i = 0; i < n; i++) {
+        ESP_UTILS_LOGI("session %d/%d: %s [%s] state=%d pri=%d", i + 1, n,
+                       sess[i].session_id, sess[i].basename,
+                       (int)sess[i].state, sess[i].priority);
     }
 }
 

@@ -7,11 +7,13 @@
  * just misses a state update.
  *
  * Event → state:
- *   UserPromptSubmit → thinking   (agent is reading the prompt)
- *   PreToolUse       → working    (a tool is about to run)
- *   PostToolUse      → thinking   (tool done, agent is reasoning again)
- *   SubagentStart    → working
- *   Stop             → idle
+ *   SessionStart      → idle      (session appears in the pet's list)
+ *   SessionEnd        → sleeping  (removes it from the list, Clawd semantics)
+ *   UserPromptSubmit  → thinking  (agent is reading the prompt)
+ *   PreToolUse        → working   (a tool is about to run)
+ *   PostToolUse       → thinking  (tool done, agent is reasoning again)
+ *   SubagentStart     → working
+ *   Stop              → idle
  */
 
 const http = require('http');
@@ -19,6 +21,8 @@ const http = require('http');
 const PORT = Number(process.env.PET_BRIDGE_PORT) || 8787;
 
 const EVENT_TO_STATE = {
+  SessionStart: 'idle',
+  SessionEnd: 'sleeping',
   UserPromptSubmit: 'thinking',
   PreToolUse: 'working',
   PostToolUse: 'thinking',
@@ -26,13 +30,13 @@ const EVENT_TO_STATE = {
   Stop: 'idle',
 };
 
-function postState(state, sessionId, event) {
+function postState(state, sessionId, event, basename) {
   const payload = JSON.stringify({
     version: 'v1',
-    agent_id: 'claude-code',
     session_id: sessionId || 'default',
     state,
     event,
+    basename,
     timestamp: Date.now(),
   });
   const req = http.request(
@@ -62,5 +66,7 @@ process.stdin.on('end', () => {
   }
   const state = EVENT_TO_STATE[hook.hook_event_name];
   if (!state) return; // event we don't map (e.g. Notification) → skip
-  postState(state, hook.session_id, hook.hook_event_name);
+  const cwd = hook.cwd || '';
+  const basename = cwd.split('/').filter(Boolean).pop() || '';
+  postState(state, hook.session_id, hook.hook_event_name, basename);
 });

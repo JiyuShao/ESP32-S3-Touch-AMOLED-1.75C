@@ -1,35 +1,47 @@
 #!/usr/bin/env node
 /*
- * Pet Bridge — PC-side daemon: agent states in, dominant display state out.
+ * Pet Bridge — PC-side daemon: agent states in, session list + dominant
+ * display state out (ticket 06, Clawd-aligned wire protocol).
  *
  * HTTP  POST /state  → ingest {"state": "<clawd-state>", "session_id", ...}
- * WS    GET  /pet    → push display-state JSON to the ESP32, replay on connect
+ * WS    GET  /pet    → snapshot on connect, then incremental state /
+ *                       session_deleted / display pushes (Clawd envelope:
+ *                       every message carries version / type / timestamp).
  *
- * Sessions are tracked per session_id with a 5 min TTL; the dominant session
+ * Sessions are tracked per session_id; idle sessions expire after 5 min,
+ * active ones after 30 min (long tool calls survive). "sleeping" (the
+ * SessionEnd state) removes a session immediately. The dominant session
  * (Clawd priority table) maps to one of the pet's 6 display states.
  * Zero npm dependencies. Run: node bridge.js
  */
 
 const http = require('http');
 const crypto = require('crypto');
-const { isValidState, resolveDominantState, DISPLAY_STATE } = require('./priority');
+const { isValidState, resolveDominantState, DISPLAY_STATE, getStatePriority } = require('./priority');
 
-const PORT = 8787;
+const PORT = Number(process.env.PET_BRIDGE_PORT) || 8787;
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const SESSION_TTL_MS = Number(process.env.PET_BRIDGE_SESSION_TTL_MS) || 5 * 60 * 1000;
+const IDLE_TTL_MS = Number(process.env.PET_BRIDGE_SESSION_TTL_MS) || 5 * 60 * 1000;
+const ACTIVE_TTL_MS = Number(process.env.PET_BRIDGE_ACTIVE_TTL_MS) || 30 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
+const MAX_SESSIONS = 8;
 
 const clients = new Set(); // connected WS sockets
-const sessions = new Map(); // session_id → { payload }
-let lastBroadcast = null;
+const sessions = new Map(); // session_id → { payload, basename, updatedAt }
+let lastDisplay = 'idle';
 
 /* ---------------- session + priority resolution ---------------- */
 
+function ttlOf(payload) {
+  return payload.state === 'idle' || payload.state === 'sleeping' ? IDLE_TTL_MS : ACTIVE_TTL_MS;
+}
+
 function sweepStale(now) {
   for (const [id, s] of sessions) {
-    if (now - s.updatedAt > SESSION_TTL_MS) {
+    if (now - s.updatedAt > ttlOf(s.payload)) {
       sessions.delete(id);
       console.log(`[bridge] session expired: ${id}`);
+      broadcastMsg({ version: 'v1', type: 'session_deleted', timestamp: now, session_id: id });
     }
   }
 }
@@ -38,23 +50,54 @@ function dominantSession() {
   return resolveDominantState([...sessions.values()].map((s) => s.payload));
 }
 
-function broadcast(stateMsg) {
-  lastBroadcast = stateMsg;
-  const text = JSON.stringify(stateMsg);
+function currentDisplay() {
+  const dom = dominantSession();
+  return dom ? (DISPLAY_STATE[dom.state] ?? 'idle') : 'idle';
+}
+
+/* One wire record for a session: display-mapped state + sort key. */
+function sessionRecord(id, s) {
+  return {
+    session_id: id,
+    basename: s.basename,
+    state: DISPLAY_STATE[s.payload.state] ?? 'idle',
+    updated_at: s.updatedAt,
+    priority: getStatePriority(s.payload.state),
+  };
+}
+
+function sortedRecords() {
+  return [...sessions.entries()]
+    .map(([id, s]) => sessionRecord(id, s))
+    .sort((a, b) => b.priority - a.priority || b.updated_at - a.updated_at)
+    .slice(0, MAX_SESSIONS);
+}
+
+function broadcastMsg(msg) {
+  const text = JSON.stringify(msg);
   for (const s of clients) sendFrame(s, text);
 }
 
 /* Recompute the display state and push it if it changed. */
 function resolveAndBroadcast(now) {
   sweepStale(now);
+  const display = currentDisplay();
+  if (display === lastDisplay) return;
   const dom = dominantSession();
-  const display = dom ? (DISPLAY_STATE[dom.state] ?? 'idle') : 'idle';
-  if (lastBroadcast && lastBroadcast.state === display) return;
-  const msg = dom
-    ? { ...dom, state: display }
-    : { version: 'v1', agent_id: 'bridge', session_id: '', state: display, event: '', timestamp: Date.now() };
+  lastDisplay = display;
   console.log(`[bridge] state: ${display}${dom ? ` (session: ${dom.session_id || '?'}, raw: ${dom.state})` : ''}`);
-  broadcast(msg);
+  broadcastMsg({ version: 'v1', type: 'display', timestamp: now, state: display });
+}
+
+function sendSnapshot(socket, now) {
+  const msg = {
+    version: 'v1',
+    type: 'snapshot',
+    timestamp: now,
+    display: lastDisplay,
+    sessions: sortedRecords(),
+  };
+  sendFrame(socket, JSON.stringify(msg));
 }
 
 /* ---------------- WebSocket framing (RFC 6455) ---------------- */
@@ -153,8 +196,29 @@ const server = http.createServer((req, res) => {
         return;
       }
       const now = Date.now();
-      const id = json.session_id || json.agent_id || 'default';
-      sessions.set(id, { payload: json, updatedAt: now });
+      const id = json.session_id || 'default';
+      const basename = String(json.basename || '').slice(0, 31);
+
+      if (json.state === 'sleeping') {
+        // SessionEnd: leave the active list immediately (Clawd semantics)
+        if (sessions.has(id)) {
+          sessions.delete(id);
+          console.log(`[bridge] session ended: ${id}`);
+          broadcastMsg({ version: 'v1', type: 'session_deleted', timestamp: now, session_id: id });
+        }
+        resolveAndBroadcast(now);
+        res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
+        return;
+      }
+
+      sessions.set(id, { payload: json, basename, updatedAt: now });
+      console.log(`[bridge] state: ${json.state} (session: ${id}, raw: ${json.state})`);
+      broadcastMsg({
+        version: 'v1',
+        type: 'state',
+        timestamp: now,
+        ...sessionRecord(id, sessions.get(id)),
+      });
       resolveAndBroadcast(now);
       res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
     });
@@ -178,8 +242,9 @@ const server = http.createServer((req, res) => {
     socket.setNoDelay(true);
     clients.add(socket);
     console.log(`[bridge] ws client connected (total: ${clients.size})`);
-    resolveAndBroadcast(Date.now()); // sweep + (re)broadcast current state
-    if (lastBroadcast) sendFrame(socket, JSON.stringify(lastBroadcast)); // replay on connect
+    const now = Date.now();
+    resolveAndBroadcast(now); // sweep + display catch-up for existing clients
+    sendSnapshot(socket, now); // new client gets the full picture
 
     socket.on('data', makeWsReceiver(socket));
     socket.on('close', () => {
@@ -196,6 +261,6 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log(`[bridge] listening on http://0.0.0.0:${PORT}`);
   console.log('[bridge] POST /state  → ingest agent state (Clawd vocabulary)');
-  console.log('[bridge] WS   /pet    → push dominant display state to ESP32');
+  console.log('[bridge] WS   /pet    → snapshot + session list pushes to ESP32');
   setInterval(() => resolveAndBroadcast(Date.now()), SWEEP_INTERVAL_MS);
 });
