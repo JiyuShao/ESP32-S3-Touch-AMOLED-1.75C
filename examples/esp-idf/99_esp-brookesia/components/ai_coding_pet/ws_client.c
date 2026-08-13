@@ -113,6 +113,12 @@ static int connect_with_timeout(const char *ip, uint16_t port, int timeout_ms)
                 return -1;
             }
             fcntl(fd, F_SETFL, flags); // back to blocking for the session
+            /* The connect-phase SO_RCVTIMEO must not linger: a quiet bridge
+             * (no state changes) would make recv() EAGAIN every 5 s and we'd
+             * read that as a disconnect. Block until data/close/stop() instead. */
+            struct timeval no_timeout = { .tv_sec = 0, .tv_usec = 0 };
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &no_timeout, sizeof(no_timeout));
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &no_timeout, sizeof(no_timeout));
             return fd;
         } else if (sel < 0 && errno != EINTR) {
             close(fd);

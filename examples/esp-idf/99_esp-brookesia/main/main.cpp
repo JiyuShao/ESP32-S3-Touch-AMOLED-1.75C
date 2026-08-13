@@ -24,6 +24,17 @@ using namespace esp_brookesia::systems::phone;
 constexpr bool EXAMPLE_SHOW_MEM_INFO = false;
 constexpr uint32_t LVGL_TASK_STACK_SIZE = 40 * 1024;
 
+static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)data;
+        ESP_UTILS_LOGW("WiFi disconnected, reason: %d", disconn->reason);
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *got_ip = (ip_event_got_ip_t *)data;
+        ESP_UTILS_LOGI("WiFi got IP: " IPSTR, IP2STR(&got_ip->ip_info.ip));
+    }
+}
+
 static void wifi_connect_sta(void)
 {
     esp_netif_init();
@@ -34,11 +45,17 @@ static void wifi_connect_sta(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+
     wifi_config_t wifi_config = {};
     strncpy((char *)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, WIFI_PASS, sizeof(wifi_config.sta.password) - 1);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Auto-connect does not reliably kick in when the config is set at
+     * runtime (nothing else logged a connect attempt) — connect explicitly. */
+    ESP_ERROR_CHECK(esp_wifi_connect());
 
     ESP_UTILS_LOGI("Connecting to WiFi: %s", WIFI_SSID);
 

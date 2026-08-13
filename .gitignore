@@ -21,3 +21,7 @@ release-artifacts/
 releases/dist/
 releases/downloads/
 **/__pycache__/
+
+# Device-local secrets: real credentials stay on disk only.
+examples/esp-idf/99_esp-brookesia/main/wifi_config.h
+examples/esp-idf/99_esp-brookesia/components/ai_coding_pet/pet_bridge_config.h

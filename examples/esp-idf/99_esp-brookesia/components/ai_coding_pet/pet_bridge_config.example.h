@@ -2,7 +2,8 @@
 
 /*
  * PC Bridge endpoint configuration (ticket 02 MVP: hardcoded).
- * Edit to match the IP of the machine running tools/pet-bridge/bridge.js.
+ * Copy this file to pet_bridge_config.h and set the IP of the machine
+ * running tools/pet-bridge/bridge.js. pet_bridge_config.h is gitignored.
  * TODO(ticket 05+): mDNS discovery of the bridge on the local network.
  */
 
