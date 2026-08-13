@@ -7,6 +7,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -26,6 +28,7 @@
 
 static TaskHandle_t s_task = nullptr;
 static volatile bool s_stop = false;
+static volatile bool s_task_exited = false; // set by the task right before vTaskDelete
 static volatile int s_fd = -1; // live socket, closed by stop() to unblock recv
 static ws_client_msg_cb_t s_cb = nullptr;
 static void *s_cb_user = nullptr;
@@ -79,11 +82,45 @@ static int connect_with_timeout(const char *ip, uint16_t port, int timeout_ms)
         .sin_port = htons(port),
         .sin_addr.s_addr = inet_addr(ip),
     };
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+
+    /* Non-blocking connect so stop() can abort within one poll slice. */
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+    if (ret != 0 && errno != EINPROGRESS) {
         close(fd);
         return -1;
     }
-    return fd;
+
+    int elapsed = 0;
+    while (elapsed < timeout_ms) {
+        if (s_stop) {
+            close(fd);
+            return -1;
+        }
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+        struct timeval ptv = { .tv_sec = 0, .tv_usec = 100000 };
+        int sel = select(fd + 1, nullptr, &wfds, nullptr, &ptv);
+        if (sel > 0) {
+            int sock_err = 0;
+            socklen_t sock_err_len = sizeof(sock_err);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &sock_err, &sock_err_len);
+            if (sock_err != 0) {
+                close(fd);
+                return -1;
+            }
+            fcntl(fd, F_SETFL, flags); // back to blocking for the session
+            return fd;
+        } else if (sel < 0 && errno != EINTR) {
+            close(fd);
+            return -1;
+        }
+        elapsed += 100;
+    }
+    close(fd);
+    return -1;
 }
 
 /* Read until "\r\n\r\n" or timeout. Returns number of bytes read (>= 0) or -1. */
@@ -136,6 +173,11 @@ static int ws_parse_frames(ws_rx_t *rx, int fd)
         }
         if (rx->len < header_len + (int)payload_len) {
             return 0; // incomplete frame, wait for more
+        }
+        if (header_len + (int)payload_len >= RX_BUF_SIZE) {
+            // 1009 message too big — no room for the NUL terminator we promise
+            send(fd, "\x88\x02\x03\xf1", 4, 0);
+            return -1;
         }
 
         char *payload = rx->data + header_len;
@@ -233,6 +275,7 @@ retry_wait:
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
+    s_task_exited = true;
     vTaskDelete(nullptr);
 }
 
@@ -248,6 +291,7 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
     s_cb = cb;
     s_cb_user = user_data;
     s_stop = false;
+    s_task_exited = false;
 
     if (xTaskCreate(ws_client_task, "ws_client", 4096, nullptr, 5, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
@@ -263,7 +307,11 @@ void ws_client_stop(void)
         s_fd = -1;
     }
     if (s_task != nullptr) {
-        vTaskDelay(pdMS_TO_TICKS(200)); // let the task exit its loop and delete itself
+        // Wait for the task to exit before clearing the handle so a later
+        // start() can't spawn a second task while this one still lingers.
+        for (int i = 0; i < 40 && !s_task_exited; i++) {
+            vTaskDelay(pdMS_TO_TICKS(50)); // up to 2 s (bounded by connect poll)
+        }
         s_task = nullptr;
     }
 }
