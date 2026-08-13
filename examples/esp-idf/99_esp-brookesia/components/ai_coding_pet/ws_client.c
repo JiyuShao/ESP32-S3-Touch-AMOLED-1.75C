@@ -31,6 +31,7 @@ static volatile bool s_stop = false;
 static volatile bool s_task_exited = false; // set by the task right before vTaskDelete
 static volatile int s_fd = -1; // live socket, closed by stop() to unblock recv
 static ws_client_msg_cb_t s_cb = nullptr;
+static ws_client_status_cb_t s_status_cb = nullptr;
 static void *s_cb_user = nullptr;
 static char s_ip[32];
 static uint16_t s_port;
@@ -245,6 +246,9 @@ static void ws_client_task(void *arg)
             goto retry_wait;
         }
         ESP_UTILS_LOGI("WS connected to %s:%d", s_ip, s_port);
+        if (s_status_cb) {
+            s_status_cb(true, s_cb_user);
+        }
 
         /* Receive loop */
         ws_rx_t rx = { .len = 0 };
@@ -253,12 +257,18 @@ static void ws_client_task(void *arg)
             if (n <= 0) {
                 if (!s_stop) {
                     ESP_UTILS_LOGI("WS disconnected (reconnecting in %d s)", RECONNECT_MS / 1000);
+                    if (s_status_cb) {
+                        s_status_cb(false, s_cb_user);
+                    }
                 }
                 break;
             }
             rx.len += n;
             if (ws_parse_frames(&rx, fd) < 0) {
                 ESP_UTILS_LOGI("WS closed by server");
+                if (s_status_cb) {
+                    s_status_cb(false, s_cb_user);
+                }
                 break;
             }
         }
@@ -280,7 +290,8 @@ retry_wait:
 }
 
 esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
-                          ws_client_msg_cb_t cb, void *user_data)
+                          ws_client_msg_cb_t cb, ws_client_status_cb_t status_cb,
+                          void *user_data)
 {
     if (s_task != nullptr) {
         return ESP_ERR_INVALID_STATE;
@@ -289,6 +300,7 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
     s_port = port;
     strncpy(s_path, path, sizeof(s_path) - 1);
     s_cb = cb;
+    s_status_cb = status_cb;
     s_cb_user = user_data;
     s_stop = false;
     s_task_exited = false;

@@ -15,14 +15,21 @@ extern "C" {
 typedef void (*ws_client_msg_cb_t)(const char *payload, int len, void *user_data);
 
 /**
+ * @brief Called on connect/disconnect transitions (true = connected).
+ */
+typedef void (*ws_client_status_cb_t)(bool connected, void *user_data);
+
+/**
  * @brief Start the WebSocket client task.
  *
  * Connects to ws://ip:port/path, reconnects every 5 s on failure or
- * disconnect, answers server pings, and invokes cb for every text frame.
+ * disconnect, answers server pings, and invokes cb for every text frame
+ * and status_cb on connection state transitions.
  * Only one connection is supported (singleton task).
  */
 esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
-                          ws_client_msg_cb_t cb, void *user_data);
+                          ws_client_msg_cb_t cb, ws_client_status_cb_t status_cb,
+                          void *user_data);
 
 /**
  * @brief Stop the client task and close the socket. Safe to call twice.

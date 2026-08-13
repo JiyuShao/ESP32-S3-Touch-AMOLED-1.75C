@@ -1,6 +1,5 @@
 #include "lvgl.h"
 #include "esp_brookesia.hpp"
-#include "cJSON.h"
 #include "pet_bridge_config.h"
 #include "ws_client.h"
 #ifdef ESP_UTILS_LOG_TAG
@@ -22,21 +21,32 @@ namespace esp_brookesia::apps {
 
 AiCodingPet *AiCodingPet::_instance = nullptr;
 
-/* WS text frame from the bridge: {"state":"thinking",...} — log the state. */
-static void ws_message_cb(const char *payload, int len, void *user_data)
+/* WS callbacks run on the ws_client task — they only feed PetBridge (no
+ * LVGL calls); the LVGL timer below polls and updates the UI. */
+void AiCodingPet::wsMessageCb(const char *payload, int len, void *user_data)
 {
-    cJSON *root = cJSON_ParseWithLength(payload, len);
-    if (root == nullptr) {
-        ESP_UTILS_LOGW("WS bad JSON: %s", payload);
-        return;
+    AiCodingPet *self = static_cast<AiCodingPet *>(user_data);
+    if (!self->_bridge.onWsMessage(payload, len, lv_tick_get())) {
+        ESP_UTILS_LOGW("WS bad state message: %.*s", len, payload);
     }
-    cJSON *state = cJSON_GetObjectItem(root, "state");
-    if (cJSON_IsString(state)) {
-        ESP_UTILS_LOGI("state: %s", state->valuestring);
-    } else {
-        ESP_UTILS_LOGW("WS JSON has no state field: %s", payload);
+}
+
+void AiCodingPet::wsStatusCb(bool connected, void *user_data)
+{
+    AiCodingPet *self = static_cast<AiCodingPet *>(user_data);
+    self->_bridge.onConnectionChanged(connected, lv_tick_get());
+}
+
+void AiCodingPet::tickTimerCb(lv_timer_t *t)
+{
+    AiCodingPet *self = static_cast<AiCodingPet *>(t->user_data);
+    uint32_t now = lv_tick_get();
+    self->_bridge.tick(now);
+    self->_renderer.tick(now);
+    if (self->_rendered_state != self->_bridge.status().state) {
+        self->_rendered_state = self->_bridge.status().state;
+        self->_renderer.playState(self->_rendered_state);
     }
-    cJSON_Delete(root);
 }
 
 AiCodingPet *AiCodingPet::requestInstance(bool use_status_bar, bool use_navigation_bar)
@@ -63,69 +73,21 @@ bool AiCodingPet::run(void)
     /* WebSocket link to the PC Bridge (ticket 02). Auto-reconnects every 5 s. */
     if (!_ws_started) {
         ESP_UTILS_LOGI("Connecting WS: ws://%s:%d%s", PET_BRIDGE_IP, PET_BRIDGE_PORT, PET_BRIDGE_WS_PATH);
-        if (ws_client_start(PET_BRIDGE_IP, PET_BRIDGE_PORT, PET_BRIDGE_WS_PATH, ws_message_cb, this) != ESP_OK) {
+        if (ws_client_start(PET_BRIDGE_IP, PET_BRIDGE_PORT, PET_BRIDGE_WS_PATH,
+                            wsMessageCb, wsStatusCb, this) != ESP_OK) {
             ESP_UTILS_LOGE("WS client start failed");
             return false;
         }
         _ws_started = true;
     }
 
-    // Create a placeholder pet image — a rounded rectangle with a label on it.
-    // Full spritesheet rendering comes in ticket 03.
-    lv_obj_t *screen = lv_screen_active();
+    /* Pet sprite + state label (ticket 03), driven by the bridge state. */
+    _renderer.init(lv_screen_active());
+    _rendered_state = PET_STATE_DISCONNECTED; // matches init visual
 
-    _pet_image = lv_obj_create(screen);
-    lv_obj_set_size(_pet_image, 200, 220);
-    lv_obj_align(_pet_image, LV_ALIGN_CENTER, 0, -10);
-    lv_obj_set_style_radius(_pet_image, 20, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(_pet_image, lv_color_hex(0x6080ff), LV_PART_MAIN);
-    lv_obj_set_style_border_width(_pet_image, 3, LV_PART_MAIN);
-    lv_obj_set_style_border_color(_pet_image, lv_color_hex(0x304080), LV_PART_MAIN);
-
-    // Eyes
-    lv_obj_t *eye_l = lv_obj_create(_pet_image);
-    lv_obj_set_size(eye_l, 24, 24);
-    lv_obj_set_pos(eye_l, 55, 65);
-    lv_obj_set_style_radius(eye_l, 12, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(eye_l, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_border_width(eye_l, 0, LV_PART_MAIN);
-
-    lv_obj_t *pupil_l = lv_obj_create(eye_l);
-    lv_obj_set_size(pupil_l, 10, 10);
-    lv_obj_align(pupil_l, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_radius(pupil_l, 5, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(pupil_l, lv_color_hex(0x202040), LV_PART_MAIN);
-    lv_obj_set_style_border_width(pupil_l, 0, LV_PART_MAIN);
-
-    lv_obj_t *eye_r = lv_obj_create(_pet_image);
-    lv_obj_set_size(eye_r, 24, 24);
-    lv_obj_set_pos(eye_r, 121, 65);
-    lv_obj_set_style_radius(eye_r, 12, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(eye_r, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_border_width(eye_r, 0, LV_PART_MAIN);
-
-    lv_obj_t *pupil_r = lv_obj_create(eye_r);
-    lv_obj_set_size(pupil_r, 10, 10);
-    lv_obj_align(pupil_r, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_radius(pupil_r, 5, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(pupil_r, lv_color_hex(0x202040), LV_PART_MAIN);
-    lv_obj_set_style_border_width(pupil_r, 0, LV_PART_MAIN);
-
-    // Smile
-    lv_obj_t *smile = lv_obj_create(_pet_image);
-    lv_obj_set_size(smile, 60, 20);
-    lv_obj_set_pos(smile, 70, 120);
-    lv_obj_set_style_radius(smile, 10, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(smile, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_border_width(smile, 0, LV_PART_MAIN);
-    lv_obj_set_style_clip_corner(smile, true, LV_PART_MAIN);
-
-    // State label
-    lv_obj_t *label = lv_label_create(screen);
-    lv_label_set_text(label, "AI Coding Pet");
-    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -40);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xc0c0ff), LV_PART_MAIN);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, LV_PART_MAIN);
+    if (_tick_timer == nullptr) {
+        _tick_timer = lv_timer_create(tickTimerCb, 150, this);
+    }
 
     return true;
 }
@@ -140,6 +102,10 @@ bool AiCodingPet::back(void)
 bool AiCodingPet::close(void)
 {
     ESP_UTILS_LOGD("Close");
+    if (_tick_timer != nullptr) {
+        lv_timer_delete(_tick_timer);
+        _tick_timer = nullptr;
+    }
     if (_ws_started) {
         ws_client_stop();
         _ws_started = false;

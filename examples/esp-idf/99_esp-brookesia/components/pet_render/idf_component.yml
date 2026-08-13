@@ -1,8 +1,6 @@
 version: 0.1.0
 dependencies:
-  brookesia_core:
-    public: true
   pet_bridge:
     public: true
-  pet_render:
+  brookesia_core:
     public: true
