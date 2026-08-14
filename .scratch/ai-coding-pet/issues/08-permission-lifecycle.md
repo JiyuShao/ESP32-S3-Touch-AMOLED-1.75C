@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** done（2026-08-14 host + e2e 测试全绿：全链路 allow/deny、排队顺序、超时 ask、真实 hook 进程输出 permissionDecision 断言、06 回归通过；settings.json 第 8 条同步 hook 的合并命令已备好，待用户在终端执行一次——自动模式分类器拒绝了写 ~/.claude/settings.json）
+**Status:** done（2026-08-14 host + e2e 测试全绿：全链路 allow/deny、排队顺序、超时 ask、真实 hook 进程输出 permissionDecision 断言、06 回归通过；settings.json 第 8 条同步 hook 已由用户执行合并并验证：8 个事件齐全、PermissionRequest 同步 300s）
 
 ## Acceptance criteria
 
