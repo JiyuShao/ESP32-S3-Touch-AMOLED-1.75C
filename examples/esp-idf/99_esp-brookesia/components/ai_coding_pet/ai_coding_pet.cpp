@@ -47,6 +47,7 @@ void AiCodingPet::tickTimerCb(lv_timer_t *t)
     uint32_t now = lv_tick_get();
     self->_bridge.tick(now);
     self->_renderer.tick(now);
+    self->updatePermOverlay();
     self->pollState();
     if (self->_screen == SCREEN_LIST) {
         self->refreshList(); // live session list while visible
@@ -55,8 +56,14 @@ void AiCodingPet::tickTimerCb(lv_timer_t *t)
 
 void AiCodingPet::pollState(void)
 {
-    if (_rendered_state != _bridge.status().state) {
-        _rendered_state = _bridge.status().state;
+    AgentState state = _bridge.status().state;
+    // the overlay is the top priority UX: play attention while it is up,
+    // regardless of push ordering (bridge also forces attention on its side)
+    if (_perm_overlay != nullptr && !lv_obj_has_flag(_perm_overlay, LV_OBJ_FLAG_HIDDEN)) {
+        state = PET_STATE_ATTENTION;
+    }
+    if (_rendered_state != state) {
+        _rendered_state = state;
         _renderer.playState(_rendered_state);
     }
 }
@@ -99,6 +106,7 @@ bool AiCodingPet::run(void)
 
     /* Session list screen + screen dots + swipe (ticket 07). */
     createListUi(lv_screen_active());
+    createPermOverlay(lv_screen_active()); // ticket 09: created last = topmost
     if (!_touch_cbs_added) {
         _touch_cbs_added = true;
         lv_obj_add_event_cb(lv_screen_active(), touchEventCb, LV_EVENT_PRESSED, this);
@@ -135,6 +143,7 @@ bool AiCodingPet::close(void)
     }
     _renderer.deinit(); // the shell keeps our screen; we own our LVGL objects
     destroyListUi();
+    destroyPermOverlay();
     if (_touch_cbs_added) {
         _touch_cbs_added = false;
         lv_obj_remove_event_cb(lv_screen_active(), touchEventCb);
@@ -310,6 +319,139 @@ void AiCodingPet::updateDots(void)
         lv_obj_set_style_bg_color(_dots[i], active ? pet_theme::current()->dot_active
                                                   : pet_theme::current()->dot_inactive, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(_dots[i], active ? LV_OPA_90 : LV_OPA_60, LV_PART_MAIN);
+    }
+}
+
+/* ---------------- ticket 09: permission approval overlay ---------------- */
+
+void AiCodingPet::createPermOverlay(lv_obj_t *parent)
+{
+    _perm_overlay = lv_obj_create(parent);
+    lv_obj_set_size(_perm_overlay, lv_pct(100), lv_pct(100));
+    lv_obj_align(_perm_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(_perm_overlay, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_perm_overlay, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_perm_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_perm_overlay, 0, LV_PART_MAIN);
+    lv_obj_add_flag(_perm_overlay, LV_OBJ_FLAG_HIDDEN);
+    // No EVENT_BUBBLE: while the overlay is up its zones swallow every press,
+    // so the screen's swipe handler never sees them. That is the whole
+    // point — page swipes are masked while a decision is pending (ticket 09).
+
+    _perm_allow = lv_obj_create(_perm_overlay);
+    lv_obj_set_size(_perm_allow, lv_pct(100), lv_pct(50));
+    lv_obj_align(_perm_allow, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(_perm_allow, pet_theme::current()->state[PET_STATE_IDLE], LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_perm_allow, LV_OPA_10, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_perm_allow, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_perm_allow, 0, LV_PART_MAIN);
+    lv_obj_add_flag(_perm_allow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(_perm_allow, permEventCb, LV_EVENT_CLICKED, this);
+
+    _perm_deny = lv_obj_create(_perm_overlay);
+    lv_obj_set_size(_perm_deny, lv_pct(100), lv_pct(50));
+    lv_obj_align(_perm_deny, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(_perm_deny, pet_theme::current()->state[PET_STATE_ERROR], LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(_perm_deny, LV_OPA_10, LV_PART_MAIN);
+    lv_obj_set_style_border_width(_perm_deny, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_perm_deny, 0, LV_PART_MAIN);
+    lv_obj_add_flag(_perm_deny, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(_perm_deny, permEventCb, LV_EVENT_CLICKED, this);
+
+    _perm_tool = lv_label_create(_perm_allow);
+    lv_obj_set_style_text_font(_perm_tool, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_perm_tool, pet_theme::current()->fg, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_perm_tool, 12, LV_PART_MAIN);
+    lv_label_set_long_mode(_perm_tool, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(_perm_tool, lv_pct(100));
+    lv_obj_align(_perm_tool, LV_ALIGN_TOP_MID, 0, 0);
+
+    _perm_hint = lv_label_create(_perm_allow);
+    lv_obj_set_style_text_font(_perm_hint, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(_perm_hint, pet_theme::current()->comment, LV_PART_MAIN);
+    lv_label_set_long_mode(_perm_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(_perm_hint, lv_pct(92));
+    lv_obj_align(_perm_hint, LV_ALIGN_TOP_MID, 0, 46);
+
+    lv_obj_t *allow_caption = lv_label_create(_perm_allow);
+    lv_label_set_text(allow_caption, "Tap to allow (once)");
+    lv_obj_set_style_text_font(allow_caption, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(allow_caption, pet_theme::current()->state[PET_STATE_IDLE], LV_PART_MAIN);
+    lv_obj_align(allow_caption, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    lv_obj_t *deny_caption = lv_label_create(_perm_deny);
+    lv_label_set_text(deny_caption, "Tap to deny");
+    lv_obj_set_style_text_font(deny_caption, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(deny_caption, pet_theme::current()->state[PET_STATE_ERROR], LV_PART_MAIN);
+    lv_obj_align(deny_caption, LV_ALIGN_CENTER, 0, 0);
+}
+
+void AiCodingPet::destroyPermOverlay(void)
+{
+    if (_perm_overlay != nullptr) {
+        lv_obj_del(_perm_overlay); // zones + labels die with it
+    }
+    _perm_overlay = nullptr;
+    _perm_allow = nullptr;
+    _perm_deny = nullptr;
+    _perm_tool = nullptr;
+    _perm_hint = nullptr;
+}
+
+void AiCodingPet::updatePermOverlay(void)
+{
+    if (_perm_overlay == nullptr) {
+        return;
+    }
+    const pet_bridge::PermissionRequest &perm = _bridge.pendingPermission();
+    bool pending = perm.permission_id[0] != '\0';
+    bool shown = !lv_obj_has_flag(_perm_overlay, LV_OBJ_FLAG_HIDDEN);
+    if (pending && !shown) {
+        lv_obj_clear_flag(_perm_overlay, LV_OBJ_FLAG_HIDDEN);
+    } else if (!pending && shown) {
+        lv_obj_add_flag(_perm_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (pending && strcmp(perm.permission_id, _perm_shown_id) != 0) {
+        snprintf(_perm_shown_id, sizeof(_perm_shown_id), "%s", perm.permission_id);
+        lv_label_set_text(_perm_tool, perm.tool[0] ? perm.tool : "?");
+        lv_label_set_text(_perm_hint, perm.hint);
+        ESP_UTILS_LOGI("permission overlay: tool=%s hint=%.40s", perm.tool, perm.hint);
+    }
+}
+
+void AiCodingPet::sendPermissionResponse(const char *decision)
+{
+    const pet_bridge::PermissionRequest &perm = _bridge.pendingPermission();
+    if (perm.permission_id[0] == '\0') {
+        return; // already resolved elsewhere
+    }
+    // spec: permission_response carries permission_id + decision; masked by
+    // ws_client_send_text (≤125 bytes — a full UUID id fits)
+    char msg[128];
+    int n = snprintf(msg, sizeof(msg),
+                     "{\"version\":\"v1\",\"type\":\"permission_response\","
+                     "\"permission_id\":\"%s\",\"decision\":\"%s\"}",
+                     perm.permission_id, decision);
+    if (n <= 0 || n >= (int)sizeof(msg)) {
+        ESP_UTILS_LOGE("permission response too long (%d)", n);
+        return;
+    }
+    esp_err_t err = ws_client_send_text(msg);
+    ESP_UTILS_LOGI("permission %s: tool=%s err=%s", decision, perm.tool, esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return; // keep the overlay; the bridge's timeout settles ask (fail-open)
+    }
+    _bridge.clearPermission(); // overlay hides on the next tick
+}
+
+void AiCodingPet::permEventCb(lv_event_t *e)
+{
+    AiCodingPet *self = static_cast<AiCodingPet *>(lv_event_get_user_data(e));
+    lv_obj_t *target = static_cast<lv_obj_t *>(lv_event_get_current_target(e));
+    if (target == self->_perm_allow) {
+        self->sendPermissionResponse("once"); // buddy vocabulary: once → allow
+    } else if (target == self->_perm_deny) {
+        self->sendPermissionResponse("deny");
     }
 }
 

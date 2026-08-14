@@ -149,6 +149,53 @@ int main(void)
     sess = b.sessions(&n);
     assert(n == PET_BRIDGE_MAX_SESSIONS);
 
+    /* ---- ticket 09: board-side permission state ---- */
+
+    const char *perm =
+        "{\"version\":\"v1\",\"type\":\"permission\",\"timestamp\":1600,"
+        "\"permission_id\":\"p1\",\"tool\":\"Bash\",\"hint\":\"echo hi\"}";
+    assert(b.onWsMessage(perm, (int)strlen(perm), 1600));
+    const PermissionRequest &p = b.pendingPermission();
+    assert(strcmp(p.permission_id, "p1") == 0);
+    assert(strcmp(p.tool, "Bash") == 0);
+    assert(strcmp(p.hint, "echo hi") == 0);
+
+    /* escaped quote in a hint: parser stops at the backslash, no crash */
+    const char *perm2 =
+        "{\"version\":\"v1\",\"type\":\"permission\",\"permission_id\":\"p2\","
+        "\"tool\":\"Write\",\"hint\":\"echo \\\"hi\\\"\"}";
+    assert(b.onWsMessage(perm2, (int)strlen(perm2), 1700));
+    assert(strcmp(b.pendingPermission().permission_id, "p2") == 0);
+    assert(strcmp(b.pendingPermission().tool, "Write") == 0);
+
+    /* malformed permission (no permission_id) → false, previous kept */
+    assert(!b.onWsMessage("{\"type\":\"permission\",\"tool\":\"Bash\"}",
+                          (int)strlen("{\"type\":\"permission\",\"tool\":\"Bash\"}"), 1800));
+    assert(strcmp(b.pendingPermission().permission_id, "p2") == 0);
+
+    /* resolved with a different id → still pending */
+    assert(b.onWsMessage("{\"version\":\"v1\",\"type\":\"permission_resolved\","
+                         "\"permission_id\":\"p1\"}",
+                         (int)strlen("{\"version\":\"v1\",\"type\":\"permission_resolved\","
+                                     "\"permission_id\":\"p1\"}"), 1900));
+    assert(strcmp(b.pendingPermission().permission_id, "p2") == 0);
+
+    /* resolved with the matching id → cleared */
+    assert(b.onWsMessage("{\"version\":\"v1\",\"type\":\"permission_resolved\","
+                         "\"permission_id\":\"p2\"}",
+                         (int)strlen("{\"version\":\"v1\",\"type\":\"permission_resolved\","
+                                     "\"permission_id\":\"p2\"}"), 2000));
+    assert(b.pendingPermission().permission_id[0] == '\0');
+
+    /* link loss clears a pending permission (bridge can't answer anymore) */
+    const char *perm3 =
+        "{\"version\":\"v1\",\"type\":\"permission\",\"permission_id\":\"p3\",\"tool\":\"Bash\"}";
+    assert(b.onWsMessage(perm3, (int)strlen(perm3), 2100));
+    assert(strcmp(b.pendingPermission().permission_id, "p3") == 0);
+    b.onConnectionChanged(false, 2200);
+    assert(b.pendingPermission().permission_id[0] == '\0');
+    b.onConnectionChanged(true, 2300);
+
     printf("pet_bridge: all checks passed (%zu callbacks)\n", fired.size());
     return 0;
 }

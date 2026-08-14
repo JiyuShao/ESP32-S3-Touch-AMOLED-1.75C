@@ -36,6 +36,17 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
  */
 void ws_client_stop(void);
 
+/**
+ * @brief Send one text frame to the server (masked, RFC 6455 client rules).
+ *
+ * Thread-safe (may be called from any task); best-effort. The frame is
+ * dropped if the client is not connected. Text must be at most 125 bytes —
+ * enough for the pet's one upstream message (permission_response).
+ * @return ESP_OK on send, ESP_ERR_INVALID_STATE if not connected,
+ *         ESP_ERR_INVALID_ARG if the text is empty or too long.
+ */
+esp_err_t ws_client_send_text(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

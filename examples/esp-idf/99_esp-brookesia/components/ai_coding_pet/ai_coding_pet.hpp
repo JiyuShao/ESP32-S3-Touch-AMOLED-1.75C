@@ -46,6 +46,14 @@ private:
     lv_coord_t _swipe_start_y = LV_COORD_MIN;
     bool _empty_logged = false;
 
+    /* ticket 09: permission approval overlay (top half = allow, bottom = deny) */
+    lv_obj_t *_perm_overlay = nullptr;
+    lv_obj_t *_perm_allow = nullptr;
+    lv_obj_t *_perm_deny = nullptr;
+    lv_obj_t *_perm_tool = nullptr;
+    lv_obj_t *_perm_hint = nullptr;
+    char _perm_shown_id[sizeof(pet_bridge::PermissionRequest::permission_id)] = {}; // id the overlay texts were set for
+
     /** Push bridge state into the renderer on change. */
     void pollState(void);
     void createListUi(lv_obj_t *parent);
@@ -53,6 +61,10 @@ private:
     void switchScreen(Screen screen);
     void refreshList(void);
     void updateDots(void);
+    void createPermOverlay(lv_obj_t *parent);
+    void destroyPermOverlay(void);
+    void updatePermOverlay(void);
+    void sendPermissionResponse(const char *decision);
 
     /* WS callbacks run on the ws_client task — they only feed PetBridge
      * (no LVGL calls); the LVGL timer polls and updates the UI. */
@@ -60,6 +72,7 @@ private:
     static void wsStatusCb(bool connected, void *user_data);
     static void tickTimerCb(lv_timer_t *t);
     static void touchEventCb(lv_event_t *e);
+    static void permEventCb(lv_event_t *e);
 };
 
 } // namespace esp_brookesia::apps

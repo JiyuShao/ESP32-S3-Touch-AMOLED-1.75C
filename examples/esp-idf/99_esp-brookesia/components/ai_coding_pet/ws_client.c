@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "lwip/sockets.h"
 #include "esp_random.h"
 #include "ws_client.h"
@@ -23,6 +24,7 @@
 #define WS_MAGIC_KEY    "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 #define RECONNECT_MS    5000
 #define SOCK_TIMEOUT_MS 5000
+#define SEND_TEXT_MAX   125 // single-byte length header only (client masking)
 
 #define RX_BUF_SIZE 2048
 
@@ -30,6 +32,7 @@ static TaskHandle_t s_task = nullptr;
 static volatile bool s_stop = false;
 static volatile bool s_task_exited = false; // set by the task right before vTaskDelete
 static volatile int s_fd = -1; // live socket, closed by stop() to unblock recv
+static SemaphoreHandle_t s_tx_mutex = nullptr; // guards writes: task (pong/close) vs UI task (send_text)
 static ws_client_msg_cb_t s_cb = nullptr;
 static ws_client_status_cb_t s_status_cb = nullptr;
 static void *s_cb_user = nullptr;
@@ -187,7 +190,9 @@ static int ws_parse_frames(ws_rx_t *rx, int fd)
         }
         if (header_len + (int)payload_len >= RX_BUF_SIZE) {
             // 1009 message too big — no room for the NUL terminator we promise
+            xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
             send(fd, "\x88\x02\x03\xf1", 4, 0);
+            xSemaphoreGive(s_tx_mutex);
             return -1;
         }
 
@@ -202,9 +207,13 @@ static int ws_parse_frames(ws_rx_t *rx, int fd)
             pong[0] = (char)0x8a;
             pong[1] = (char)payload_len;
             memcpy(pong + 2, payload, payload_len);
+            xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
             send(fd, pong, 2 + (int)payload_len, 0);
+            xSemaphoreGive(s_tx_mutex);
         } else if (opcode == 0x8) { // close
+            xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
             send(fd, "\x88\x00", 2, 0);
+            xSemaphoreGive(s_tx_mutex);
             return -1;
         }
 
@@ -309,12 +318,48 @@ retry_wait:
     vTaskDelete(nullptr);
 }
 
+esp_err_t ws_client_send_text(const char *text)
+{
+    if (text == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    size_t len = strlen(text);
+    if (len == 0 || len > SEND_TEXT_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    int fd = s_fd;
+    if (fd < 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint8_t mask[4];
+    esp_fill_random(mask, sizeof(mask));
+    char frame[2 + 4 + SEND_TEXT_MAX];
+    frame[0] = (char)0x81;             // FIN + text
+    frame[1] = (char)(0x80 | len);     // masked + payload length
+    memcpy(frame + 2, mask, 4);
+    for (size_t i = 0; i < len; i++) {
+        frame[2 + 4 + i] = text[i] ^ (char)mask[i & 3];
+    }
+
+    xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+    int sent = send(fd, frame, 2 + 4 + (int)len, 0);
+    xSemaphoreGive(s_tx_mutex);
+    return (sent == 2 + 4 + (int)len) ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
                           ws_client_msg_cb_t cb, ws_client_status_cb_t status_cb,
                           void *user_data)
 {
     if (s_task != nullptr) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (s_tx_mutex == nullptr) {
+        s_tx_mutex = xSemaphoreCreateMutex();
+        if (s_tx_mutex == nullptr) {
+            return ESP_ERR_NO_MEM;
+        }
     }
     strncpy(s_ip, ip, sizeof(s_ip) - 1);
     s_port = port;

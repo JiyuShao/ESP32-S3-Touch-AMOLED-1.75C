@@ -289,6 +289,36 @@ bool PetBridge::applySessionState(const char *payload, int len, uint32_t now_ms)
     return true;
 }
 
+bool PetBridge::applyPermission(const char *payload, int len, uint32_t now_ms)
+{
+    PermissionRequest p;
+    if (!extractString(payload, len, "permission_id", p.permission_id, sizeof(p.permission_id))) {
+        return false;
+    }
+    if (!extractString(payload, len, "tool", p.tool, sizeof(p.tool))) {
+        p.tool[0] = '\0';
+    }
+    // Cross-side contract: the bridge sanitizes the hint (strips quotes and
+    // backslashes) because extractString stops at escapes — see bridge.js.
+    if (!extractString(payload, len, "hint", p.hint, sizeof(p.hint))) {
+        p.hint[0] = '\0';
+    }
+    _permission = p;
+    return true;
+}
+
+bool PetBridge::applyPermissionResolved(const char *payload, int len, uint32_t now_ms)
+{
+    char permission_id[sizeof(_permission.permission_id)];
+    if (!extractString(payload, len, "permission_id", permission_id, sizeof(permission_id))) {
+        return false;
+    }
+    if (strcmp(permission_id, _permission.permission_id) == 0) {
+        _permission = PermissionRequest{}; // resolved: nothing pending
+    }
+    return true;
+}
+
 bool PetBridge::applySessionDeleted(const char *payload, int len, uint32_t now_ms)
 {
     char session_id[sizeof(_sessions[0].session_id)];
@@ -313,6 +343,10 @@ bool PetBridge::onWsMessage(const char *payload, int len, uint32_t now_ms)
         ok = applySessionDeleted(payload, len, now_ms);
     } else if (strcmp(type, "display") == 0) {
         ok = applyDisplayState(payload, len, now_ms);
+    } else if (strcmp(type, "permission") == 0) {
+        ok = applyPermission(payload, len, now_ms);
+    } else if (strcmp(type, "permission_resolved") == 0) {
+        ok = applyPermissionResolved(payload, len, now_ms);
     } else {
         return false;
     }
@@ -334,6 +368,11 @@ void PetBridge::onConnectionChanged(bool connected, uint32_t now_ms)
         }
     } else {
         updateState(PET_STATE_DISCONNECTED, now_ms);
+        // link lost: nobody can collect the answer anymore, so drop any
+        // pending permission — otherwise the overlay would wait forever for
+        // a permission_resolved that can never arrive (bridge settles ask
+        // on timeout only while the link is up)
+        _permission = PermissionRequest{};
     }
 }
 

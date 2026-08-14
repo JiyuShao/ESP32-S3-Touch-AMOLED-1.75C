@@ -41,6 +41,13 @@ struct AgentStatus {
     uint32_t last_update_ms = 0;
 };
 
+/* One pending permission request from the PC Bridge (ticket 08/09). */
+struct PermissionRequest {
+    char permission_id[37] = {}; // empty = no request pending; full UUID fits (36 + NUL)
+    char tool[64] = {};
+    char hint[256] = {};
+};
+
 /**
  * State model fed by the PC Bridge protocol (ticket 06, Clawd-aligned):
  *   {"version":"v1","type":"snapshot",...}      full session list + display
@@ -77,12 +84,20 @@ public:
         return _sessions;
     }
 
+    /** Pending permission request; empty permission_id = none. */
+    const PermissionRequest &pendingPermission() const { return _permission; }
+
+    /** Locally clear the pending request (after the board answered it). */
+    void clearPermission() { _permission = PermissionRequest{}; }
+
 private:
     void updateState(AgentState state, uint32_t now_ms);
     bool applyDisplayState(const char *payload, int len, uint32_t now_ms);
     bool applySnapshot(const char *payload, int len, uint32_t now_ms);
     bool applySessionState(const char *payload, int len, uint32_t now_ms);
     bool applySessionDeleted(const char *payload, int len, uint32_t now_ms);
+    bool applyPermission(const char *payload, int len, uint32_t now_ms);
+    bool applyPermissionResolved(const char *payload, int len, uint32_t now_ms);
     void insertSorted(const SessionEntry &entry);
     void removeSession(const char *session_id);
 
@@ -90,6 +105,7 @@ private:
     AgentStatus _status;
     SessionEntry _sessions[PET_BRIDGE_MAX_SESSIONS];
     int _session_count = 0;
+    PermissionRequest _permission;
 };
 
 } // namespace pet_bridge
