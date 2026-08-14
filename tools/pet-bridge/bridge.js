@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 /*
  * Pet Bridge — PC-side daemon: agent states in, session list + dominant
- * display state out (ticket 06, Clawd-aligned wire protocol).
+ * display state out (ticket 06, Clawd-aligned wire protocol), plus the
+ * board-mediated permission lifecycle (ticket 08).
  *
- * HTTP  POST /state  → ingest {"state": "<clawd-state>", "session_id", ...}
- * WS    GET  /pet    → snapshot on connect, then incremental state /
- *                       session_deleted / display pushes (Clawd envelope:
- *                       every message carries version / type / timestamp).
+ * HTTP  POST /state       → ingest {"state": "<clawd-state>", "session_id", ...}
+ * HTTP  POST /permission  → block until the board answers allow/deny or the
+ *                           150 s timeout falls back to "ask" (fail-open)
+ * WS    GET  /pet         → snapshot on connect, then incremental state /
+ *                           session_deleted / display / permission /
+ *                           permission_resolved pushes (Clawd envelope:
+ *                           every message carries version / type / timestamp)
  *
  * Sessions are tracked per session_id; idle sessions expire after 5 min,
  * active ones after 30 min (long tool calls survive). "sleeping" (the
  * SessionEnd state) removes a session immediately. The dominant session
  * (Clawd priority table) maps to one of the pet's 6 display states.
+ * While a permission request is pending the display is forced to
+ * "attention"; the board's permission_response text frame settles it.
  * Zero npm dependencies. Run: node bridge.js
  */
 
@@ -25,10 +31,13 @@ const IDLE_TTL_MS = Number(process.env.PET_BRIDGE_SESSION_TTL_MS) || 5 * 60 * 10
 const ACTIVE_TTL_MS = Number(process.env.PET_BRIDGE_ACTIVE_TTL_MS) || 30 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
 const MAX_SESSIONS = 8;
+const PERMISSION_TIMEOUT_MS = Number(process.env.PET_BRIDGE_PERMISSION_TIMEOUT_MS) || 150 * 1000;
 
 const clients = new Set(); // connected WS sockets
 const sessions = new Map(); // session_id → { payload, basename, updatedAt }
 let lastDisplay = 'idle';
+const permissionQueue = []; // { id, tool, hint, resolve } — waiting their turn
+let pendingPermission = null; // the one request pushed to the board { id, tool, hint, resolve, timer }
 
 /* ---------------- session + priority resolution ---------------- */
 
@@ -51,6 +60,7 @@ function dominantSession() {
 }
 
 function currentDisplay() {
+  if (pendingPermission) return 'attention'; // approval owns the display while pending
   const dom = dominantSession();
   return dom ? (DISPLAY_STATE[dom.state] ?? 'idle') : 'idle';
 }
@@ -98,6 +108,52 @@ function sendSnapshot(socket, now) {
     sessions: sortedRecords(),
   };
   sendFrame(socket, JSON.stringify(msg));
+}
+
+/* ---------------- permission lifecycle (ticket 08) ---------------- */
+
+function settlePermission(p, decision) {
+  if (pendingPermission !== p) return;
+  clearTimeout(p.timer);
+  pendingPermission = null;
+  broadcastMsg({
+    version: 'v1',
+    type: 'permission_resolved',
+    timestamp: Date.now(),
+    permission_id: p.id,
+    decision,
+  });
+  p.resolve(decision);
+  console.log(`[bridge] permission ${p.id}: ${decision}`);
+  resolveAndBroadcast(Date.now()); // attention lifts, dominant recomputed
+  pumpPermission();
+}
+
+function pumpPermission() {
+  if (pendingPermission || permissionQueue.length === 0) return;
+  const p = (pendingPermission = permissionQueue.shift());
+  console.log(`[bridge] permission ${p.id}: asking board (tool: ${p.tool})`);
+  broadcastMsg({
+    version: 'v1',
+    type: 'permission',
+    timestamp: Date.now(),
+    permission_id: p.id,
+    tool: p.tool,
+    hint: p.hint,
+  });
+  resolveAndBroadcast(Date.now()); // push forced attention
+  p.timer = setTimeout(() => settlePermission(p, 'ask'), PERMISSION_TIMEOUT_MS);
+}
+
+/* Board → bridge text frame: {"type":"permission_response", permission_id,
+ * decision: "once"|"deny"} (buddy vocabulary: once = allow this one). */
+function handlePermissionResponse(msg) {
+  if (msg.type !== 'permission_response') return;
+  const p = pendingPermission;
+  if (!p || msg.permission_id !== p.id) return;
+  const decision = msg.decision === 'once' ? 'allow' : msg.decision === 'deny' ? 'deny' : null;
+  if (!decision) return;
+  settlePermission(p, decision);
 }
 
 /* ---------------- WebSocket framing (RFC 6455) ---------------- */
@@ -167,7 +223,12 @@ function makeWsReceiver(socket) {
         socket.end();
         return;
       } else if (opcode === 0x1) {
-        // ESP32 text messages (future: permission responses). Ignore for now.
+        // ESP32 text messages: permission responses (ticket 08).
+        try {
+          handlePermissionResponse(JSON.parse(payload.toString()));
+        } catch {
+          /* non-JSON from the board: ignore */
+        }
       }
       if (!fin) { /* fragmented control frames are illegal; ignore */ }
     }
@@ -225,6 +286,36 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url === '/permission') {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 65536) req.destroy(); // don't feed unbounded input
+    });
+    req.on('end', () => {
+      let json;
+      try {
+        json = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' }).end('bad json');
+        return;
+      }
+      const entry = {
+        id: String(json.permission_id || crypto.randomUUID()),
+        tool: String(json.tool || '').slice(0, 64),
+        hint: String(json.hint || '').replace(/["\\\n\r\t]/g, ' ').slice(0, 255),
+        resolve: (decision) => {
+          if (res.writableEnded) return; // the hook hung up — nothing to answer
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+            .end(JSON.stringify({ decision }));
+        },
+      };
+      permissionQueue.push(entry);
+      pumpPermission();
+    });
+    return;
+  }
+
   if ((req.headers.upgrade || '').toLowerCase() === 'websocket') {
     const key = req.headers['sec-websocket-key'];
     if (!key) {
@@ -260,7 +351,8 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[bridge] listening on http://0.0.0.0:${PORT}`);
-  console.log('[bridge] POST /state  → ingest agent state (Clawd vocabulary)');
-  console.log('[bridge] WS   /pet    → snapshot + session list pushes to ESP32');
+  console.log('[bridge] POST /state      → ingest agent state (Clawd vocabulary)');
+  console.log('[bridge] POST /permission → blocking board approval (allow/deny/ask)');
+  console.log('[bridge] WS   /pet        → snapshot + session list pushes to ESP32');
   setInterval(() => resolveAndBroadcast(Date.now()), SWEEP_INTERVAL_MS);
 });

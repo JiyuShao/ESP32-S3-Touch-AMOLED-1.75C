@@ -4,18 +4,18 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done（2026-08-14 host + e2e 测试全绿：全链路 allow/deny、排队顺序、超时 ask、真实 hook 进程输出 permissionDecision 断言、06 回归通过；settings.json 已合并第 8 条同步 hook）
 
 ## Acceptance criteria
 
-- [ ] PermissionRequest hook(matcher 覆盖全部工具,**同步阻塞型**,超时 300s):POST /permission 并挂起等待;拿到决策后按 hook 输出协议返回 `permissionDecision`(once→allow,deny→deny);bridge 不可达立即返回 ask(fail-open)
-- [ ] bridge 新增 POST /permission:阻塞响应直至决策或超时,响应 `{"decision":"allow"|"deny"|"ask"}`;挂起默认 150s(环境变量可调,须小于 hook 的 300s)
-- [ ] WS 消息:`permission`(bridge→板)、`permission_resolved`(bridge→板);bridge 解析板→bridge 的 `permission_response` 文本帧(此前文本帧被忽略,现改为解析)
-- [ ] 挂起期间 display 强制 attention(优先于一切 session 主导解析);决策或超时后按现有规则重算 dominant
-- [ ] 排队:多个权限请求按到达顺序处理,同一时刻只推送一个活跃请求
-- [ ] 测试(host):fake WS client 扮演板子完成全链路(POST /permission 挂起 → 收到 permission 推送且 display=attention → 回 permission_response → 挂起响应返回 allow);短超时路径返回 ask;permission_resolved 推送与排队顺序断言
-- [ ] 端到端脚本:真实 hook 进程 + fake 板子自动批准 → hook stdout 输出 permissionDecision=allow;fake 板子缺席 → ask
-- [ ] 现有 7 个事件 hook 与 06 协议回归不受影响(全量测试套件通过)
+- [x] PermissionRequest hook(matcher 覆盖全部工具,**同步阻塞型**,超时 300s):POST /permission 并挂起等待;拿到决策后按 hook 输出协议返回 `permissionDecision`(once→allow,deny→deny);bridge 不可达立即返回 ask(fail-open)
+- [x] bridge 新增 POST /permission:阻塞响应直至决策或超时,响应 `{"decision":"allow"|"deny"|"ask"}`;挂起默认 150s(环境变量可调,须小于 hook 的 300s)
+- [x] WS 消息:`permission`(bridge→板)、`permission_resolved`(bridge→板);bridge 解析板→bridge 的 `permission_response` 文本帧(此前文本帧被忽略,现改为解析)
+- [x] 挂起期间 display 强制 attention(优先于一切 session 主导解析);决策或超时后按现有规则重算 dominant
+- [x] 排队:多个权限请求按到达顺序处理,同一时刻只推送一个活跃请求
+- [x] 测试(host):fake WS client 扮演板子完成全链路(POST /permission 挂起 → 收到 permission 推送且 display=attention → 回 permission_response → 挂起响应返回 allow);短超时路径返回 ask;permission_resolved 推送与排队顺序断言
+- [x] 端到端脚本:真实 hook 进程 + fake 板子自动批准 → hook stdout 输出 permissionDecision=allow;fake 板子缺席 → ask
+- [x] 现有 7 个事件 hook 与 06 协议回归不受影响(全量测试套件通过)
 
 ## 实现备注
 

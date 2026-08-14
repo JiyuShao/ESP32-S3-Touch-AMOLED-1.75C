@@ -25,3 +25,6 @@ releases/downloads/
 # Device-local secrets: real credentials stay on disk only.
 examples/esp-idf/99_esp-brookesia/main/wifi_config.h
 examples/esp-idf/99_esp-brookesia/components/ai_coding_pet/pet_bridge_config.h
+
+# host-compiled pet_bridge test binary
+/examples/esp-idf/99_esp-brookesia/components/pet_bridge/test/test
