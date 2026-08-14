@@ -122,6 +122,15 @@ function finishPhase1() {
   phase2();
 }
 
+/* The finish gate is a conjunction of events from two sockets (WS and HTTP)
+ * with no cross-socket ordering — evaluate it on EVERY event, whichever
+ * arrives last completes the phase. */
+function maybeFinish() {
+  if (answeredA && answeredB && resolvedA && resolvedB && pushedB && sawAttention && sawIdleAgain) {
+    finishPhase1();
+  }
+}
+
 let answeredA = false;
 let answeredB = false;
 let resolvedA = false;
@@ -141,6 +150,7 @@ const onMsg = makeFrameReader((msg) => {
     postPermission(P1, { permission_id: 'p1', tool: 'Bash', hint: 'rm -rf /tmp/x' }, (res) => {
       answeredA = true;
       check('p1 POST answered allow after board response', res.decision === 'allow', res.decision);
+      maybeFinish();
     });
     return;
   }
@@ -153,6 +163,7 @@ const onMsg = makeFrameReader((msg) => {
       postPermission(P1, { permission_id: 'p2', tool: 'Write', hint: 'overwrite file' }, (res) => {
         answeredB = true;
         check('p2 POST answered deny after board response', res.decision === 'deny', res.decision);
+        maybeFinish();
       });
     }
   }
@@ -165,7 +176,10 @@ const onMsg = makeFrameReader((msg) => {
     sawAttention = true;
     check('display forced to attention while pending', true);
   }
-  if (msg.type === 'display' && msg.state === 'idle' && answeredA && answeredB) {
+  if (msg.type === 'display' && msg.state === 'idle' && resolvedB) {
+    // gate on resolvedB, not the POST callbacks: the idle broadcast follows
+    // the resolved broadcast on the same WS socket (ordered), while answeredB
+    // arrives over a separate HTTP socket — a race that flips under load
     sawIdleAgain = true;
     check('display recomputed after resolve', true);
   }
@@ -177,9 +191,7 @@ const onMsg = makeFrameReader((msg) => {
     resolvedB = true;
     check('permission_resolved pushed for p2', true);
   }
-  if (answeredA && answeredB && resolvedA && resolvedB && pushedB && sawAttention && sawIdleAgain) {
-    finishPhase1();
-  }
+  maybeFinish();
 });
 
 function sendPermissionResponseFor(id, decision) {

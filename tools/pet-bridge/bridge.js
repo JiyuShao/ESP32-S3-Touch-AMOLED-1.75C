@@ -336,6 +336,20 @@ const server = http.createServer((req, res) => {
     const now = Date.now();
     resolveAndBroadcast(now); // sweep + display catch-up for existing clients
     sendSnapshot(socket, now); // new client gets the full picture
+    // re-push a pending permission: the board drops it when the link flaps,
+    // and without this the request would silently time out to ask
+    if (pendingPermission) {
+      const p = pendingPermission;
+      sendFrame(socket, JSON.stringify({
+        version: 'v1',
+        type: 'permission',
+        timestamp: Date.now(),
+        permission_id: p.id,
+        tool: p.tool,
+        hint: p.hint,
+      }));
+      console.log(`[bridge] permission ${p.id}: re-pushed to reconnected board`);
+    }
 
     socket.on('data', makeWsReceiver(socket));
     socket.on('close', () => {
