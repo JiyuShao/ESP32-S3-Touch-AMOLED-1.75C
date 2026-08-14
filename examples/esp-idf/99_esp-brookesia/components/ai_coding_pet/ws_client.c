@@ -24,7 +24,7 @@
 #define RECONNECT_MS    5000
 #define SOCK_TIMEOUT_MS 5000
 
-#define RX_BUF_SIZE 1024
+#define RX_BUF_SIZE 2048
 
 static TaskHandle_t s_task = nullptr;
 static volatile bool s_stop = false;
@@ -130,8 +130,10 @@ static int connect_with_timeout(const char *ip, uint16_t port, int timeout_ms)
     return -1;
 }
 
-/* Read until "\r\n\r\n" or timeout. Returns number of bytes read (>= 0) or -1. */
-static int read_until_headers_end(int fd, char *buf, int cap)
+/* Read until "\r\n\r\n" or timeout. Returns number of bytes read (>= 0) or -1;
+ * on success *header_end is the offset just past "\r\n\r\n". Bytes after it
+ * (the first WS frame sharing the 101 segment) belong to the caller. */
+static int read_until_headers_end(int fd, char *buf, int cap, int *header_end)
 {
     int total = 0;
     while (total < cap - 1) {
@@ -141,7 +143,9 @@ static int read_until_headers_end(int fd, char *buf, int cap)
         }
         total += n;
         buf[total] = '\0';
-        if (strstr(buf, "\r\n\r\n") != nullptr) {
+        const char *end = strstr(buf, "\r\n\r\n");
+        if (end != nullptr) {
+            *header_end = (int)(end - buf) + 4;
             return total;
         }
     }
@@ -244,12 +248,23 @@ static void ws_client_task(void *arg)
             goto retry_wait;
         }
 
+        ws_rx_t rx = { .len = 0 };
+
         char resp[512];
-        int resp_len = read_until_headers_end(fd, resp, sizeof(resp));
+        int header_end = 0;
+        int resp_len = read_until_headers_end(fd, resp, sizeof(resp), &header_end);
         if (resp_len < 0 || strstr(resp, "101") == nullptr) {
             ESP_UTILS_LOGW("Handshake rejected: %.100s", resp);
             close(fd);
             goto retry_wait;
+        }
+        /* The bridge's snapshot often shares the 101 TCP segment — bytes past
+         * the header are already WS frames and must feed the frame parser,
+         * or the rx stream stays misaligned forever. */
+        int carry = resp_len - header_end;
+        if (carry > 0) {
+            memcpy(rx.data, resp + header_end, carry);
+            rx.len = carry;
         }
         ESP_UTILS_LOGI("WS connected to %s:%d", s_ip, s_port);
         if (s_status_cb) {
@@ -257,7 +272,6 @@ static void ws_client_task(void *arg)
         }
 
         /* Receive loop */
-        ws_rx_t rx = { .len = 0 };
         while (!s_stop) {
             int n = recv(fd, rx.data + rx.len, sizeof(rx.data) - rx.len, 0);
             if (n <= 0) {
@@ -311,7 +325,7 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
     s_stop = false;
     s_task_exited = false;
 
-    if (xTaskCreate(ws_client_task, "ws_client", 4096, nullptr, 5, &s_task) != pdPASS) {
+    if (xTaskCreate(ws_client_task, "ws_client", 6144, nullptr, 5, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

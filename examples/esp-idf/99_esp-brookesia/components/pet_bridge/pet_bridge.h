@@ -26,7 +26,7 @@ namespace pet_bridge {
 
 /* One active agent session, as reported by the PC Bridge (ticket 06). */
 struct SessionEntry {
-    char session_id[32] = {};
+    char session_id[37] = {};            // full UUID fits (36 chars + NUL)
     char basename[32] = {};
     AgentState state = PET_STATE_IDLE; // display-mapped (6-state vocabulary)
     uint64_t updated_at_ms = 0;        // bridge Date.now() ms — needs 64 bit
@@ -37,7 +37,7 @@ struct SessionEntry {
 
 struct AgentStatus {
     AgentState state = PET_STATE_DISCONNECTED;
-    char session_id[32] = {};
+    char session_id[37] = {};
     uint32_t last_update_ms = 0;
 };
 
