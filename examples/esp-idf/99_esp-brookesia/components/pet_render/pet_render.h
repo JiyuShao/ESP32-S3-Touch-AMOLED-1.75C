@@ -5,6 +5,9 @@
 
 namespace pet_render {
 
+/** Uppercase display name for a state (shared with the app's list page). */
+const char *stateName(AgentState state);
+
 /**
  * Plays the sprite rows generated from the Codex-pet spritesheet.
  * All calls must come from the LVGL task (the app drives it from an
@@ -20,6 +23,8 @@ public:
     void playState(AgentState state);
     /** Play the waving row once, then fall back to the current state. */
     void playIntro(void);
+    /** Hide/show the whole pet (the app's list page replaces it). */
+    void setVisible(bool visible);
     /** Advance animation + blink indicators. Call every ~150 ms. */
     void tick(uint32_t now_ms);
 
@@ -33,6 +38,7 @@ private:
     lv_obj_t *_error_badge = nullptr;      // "!" badge (ERROR)
     lv_obj_t *_label = nullptr;            // bottom state label
     AgentState _state = PET_STATE_DISCONNECTED;
+    bool _visible = true;                  // page-level visibility (list page hides the pet)
     uint8_t _frame = 0;
     bool _done = false; // one-shot finished, holding last frame
     bool _intro_active = false;

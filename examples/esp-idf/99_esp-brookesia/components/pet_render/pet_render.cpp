@@ -1,6 +1,7 @@
 #include "pet_render.h"
 
 #include "pet_frames.h"
+#include "pet_theme.h"
 #include "esp_lib_utils.h"
 
 namespace pet_render {
@@ -16,6 +17,11 @@ const char *STATE_LABELS[PET_STATE_COUNT] = {
 
 } // namespace
 
+const char *stateName(AgentState state)
+{
+    return STATE_LABELS[state];
+}
+
 void PetRenderer::init(lv_obj_t *parent)
 {
     _image = lv_image_create(parent);
@@ -30,11 +36,12 @@ void PetRenderer::init(lv_obj_t *parent)
     lv_obj_set_style_bg_color(_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(_overlay, LV_OPA_50, LV_PART_MAIN);
     lv_obj_set_style_border_width(_overlay, 0, LV_PART_MAIN);
+    lv_obj_add_flag(_overlay, LV_OBJ_FLAG_EVENT_BUBBLE); // let swipes reach the app's screen handler
 
     _reconnect_label = lv_label_create(parent);
     lv_label_set_text(_reconnect_label, "Reconnecting...");
     lv_obj_align(_reconnect_label, LV_ALIGN_CENTER, 0, -20);
-    lv_obj_set_style_text_color(_reconnect_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_color(_reconnect_label, pet_theme::current()->fg, LV_PART_MAIN);
     lv_obj_set_style_text_font(_reconnect_label, &lv_font_montserrat_16, LV_PART_MAIN);
 
     // red blinking border + badge for ERROR
@@ -44,27 +51,28 @@ void PetRenderer::init(lv_obj_t *parent)
     lv_obj_set_style_radius(_error_border, 12, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(_error_border, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(_error_border, 4, LV_PART_MAIN);
-    lv_obj_set_style_border_color(_error_border, lv_color_hex(0xFF4040), LV_PART_MAIN);
+    lv_obj_set_style_border_color(_error_border, pet_theme::current()->error_border, LV_PART_MAIN);
     lv_obj_set_style_border_opa(_error_border, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(_error_border, LV_OBJ_FLAG_EVENT_BUBBLE); // let swipes reach the app's screen handler
 
     _error_badge = lv_label_create(parent);
     lv_label_set_text(_error_badge, "!");
     lv_obj_align(_error_badge, LV_ALIGN_CENTER, PET_FRAME_W / 2 - 14, -20 - PET_FRAME_H / 2 + 12);
-    lv_obj_set_style_text_color(_error_badge, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_color(_error_badge, pet_theme::current()->error_badge_text, LV_PART_MAIN);
     lv_obj_set_style_text_font(_error_badge, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(_error_badge, lv_color_hex(0xFF4040), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_error_badge, pet_theme::current()->error_border, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(_error_badge, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(_error_badge, 12, LV_PART_MAIN);
     lv_obj_set_style_pad_all(_error_badge, 4, LV_PART_MAIN);
 
     _label = lv_label_create(parent);
     lv_obj_align(_label, LV_ALIGN_BOTTOM_MID, 0, -40);
-    lv_obj_set_style_text_color(_label, lv_color_hex(0xC0C0FF), LV_PART_MAIN);
     lv_obj_set_style_text_font(_label, &lv_font_montserrat_20, LV_PART_MAIN);
 
     /* Initial visual: disconnected (playState would early-return — same state). */
     _state = PET_STATE_DISCONNECTED;
     lv_label_set_text(_label, STATE_LABELS[PET_STATE_DISCONNECTED]);
+    lv_obj_set_style_text_color(_label, pet_theme::current()->state[PET_STATE_DISCONNECTED], LV_PART_MAIN);
     applyVisibility();
 }
 
@@ -116,6 +124,7 @@ void PetRenderer::playState(AgentState state)
         }
     }
     lv_label_set_text(_label, STATE_LABELS[state]);
+    lv_obj_set_style_text_color(_label, pet_theme::current()->state[state], LV_PART_MAIN);
     applyVisibility();
 }
 
@@ -130,19 +139,32 @@ void PetRenderer::playIntro(void)
     lv_image_set_src(_image, pet_intro_anim.frames[0]);
 }
 
+void PetRenderer::setVisible(bool visible)
+{
+    _visible = visible;
+    applyVisibility();
+}
+
 void PetRenderer::applyVisibility(void)
 {
     bool disconnected = (_state == PET_STATE_DISCONNECTED);
     bool error = (_state == PET_STATE_ERROR);
 
-    if (disconnected) {
+    if (_visible) {
+        lv_obj_clear_flag(_image, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(_image, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (_visible && disconnected) {
         lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(_reconnect_label, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_reconnect_label, LV_OBJ_FLAG_HIDDEN);
     }
-    if (error) {
+    if (_visible && error) {
         lv_obj_clear_flag(_error_border, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(_error_badge, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -153,8 +175,8 @@ void PetRenderer::applyVisibility(void)
 
 void PetRenderer::tick(uint32_t now_ms)
 {
-    // blink the state indicators
-    if (now_ms - _last_blink >= BLINK_MS) {
+    // blink the state indicators (never while the page is hidden)
+    if (_visible && now_ms - _last_blink >= BLINK_MS) {
         _last_blink = now_ms;
         _blink_on = !_blink_on;
         if (_state == PET_STATE_ERROR) {
