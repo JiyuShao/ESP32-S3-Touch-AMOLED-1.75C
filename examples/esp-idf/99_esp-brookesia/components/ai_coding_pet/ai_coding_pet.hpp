@@ -34,8 +34,10 @@ private:
     enum Screen { SCREEN_PET = 0, SCREEN_LIST, SCREEN_COUNT };
     Screen _screen = SCREEN_PET;
     struct Row {
-        lv_obj_t *label;
-        char cache[96];
+        lv_obj_t *panel;   // card container (rounded bg)
+        lv_obj_t *accent;  // state-colored left bar
+        lv_obj_t *label;   // two-line text: title + detail
+        char cache[160];
     };
     lv_obj_t *_list_screen = nullptr;
     lv_obj_t *_list_header = nullptr;

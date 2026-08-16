@@ -27,6 +27,8 @@ public:
     void setVisible(bool visible);
     /** Advance animation + blink indicators. Call every ~150 ms. */
     void tick(uint32_t now_ms);
+    /** The pet image widget (debug/tests). */
+    lv_obj_t *image(void) { return _image; }
 
 private:
     void applyVisibility(void);
@@ -46,6 +48,7 @@ private:
     uint32_t _last_advance = 0;
     uint32_t _last_blink = 0;
     bool _blink_on = false;
+    bool _layout_logged = false; // one-shot debug log after first tick
 };
 
 } // namespace pet_render

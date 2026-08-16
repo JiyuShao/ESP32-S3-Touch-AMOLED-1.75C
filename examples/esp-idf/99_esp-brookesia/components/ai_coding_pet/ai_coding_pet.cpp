@@ -100,8 +100,18 @@ bool AiCodingPet::run(void)
         _ws_started = true;
     }
 
+    /* The shell leaves the app's visual area with its stylesheet bg (white in
+     * practice); the pet app is dark by design — paint it explicitly and drop
+     * the default scrollability (nothing on these pages scrolls). */
+    lv_obj_set_style_bg_color(lv_screen_active(), pet_theme::current()->bg, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_remove_flag(lv_screen_active(), LV_OBJ_FLAG_SCROLLABLE);
+
     /* Pet sprite + state label (ticket 03), driven by the bridge state. */
     _renderer.init(lv_screen_active());
+    ESP_UTILS_LOGD("screen %dx%d scrollable=%d",
+                   lv_obj_get_width(lv_screen_active()), lv_obj_get_height(lv_screen_active()),
+                   lv_obj_has_flag(lv_screen_active(), LV_OBJ_FLAG_SCROLLABLE));
     _rendered_state = PET_STATE_DISCONNECTED; // matches init visual
 
     /* Session list screen + screen dots + swipe (ticket 07). */
@@ -189,6 +199,10 @@ void AiCodingPet::createListUi(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(_list_screen, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(_list_screen, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(_list_screen, 0, LV_PART_MAIN);
+    // The shell's status bar floats over the app area: keep the list out
+    // from under it (rows were hidden behind the bar at the very top).
+    lv_obj_set_style_pad_top(_list_screen, 44, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(_list_screen, 16, LV_PART_MAIN);
     lv_obj_set_flex_flow(_list_screen, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(_list_screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(_list_screen, 14, LV_PART_MAIN);
@@ -207,10 +221,35 @@ void AiCodingPet::createListUi(lv_obj_t *parent)
     lv_obj_set_style_text_color(_list_empty, pet_theme::current()->comment, LV_PART_MAIN);
 
     for (int i = 0; i < PET_BRIDGE_MAX_SESSIONS; i++) {
-        _list_rows[i].label = lv_label_create(_list_screen);
+        /* Card-style row: rounded panel + state-colored accent bar + text */
+        lv_obj_t *panel = lv_obj_create(_list_screen);
+        lv_obj_set_width(panel, lv_pct(92));
+        lv_obj_set_height(panel, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(panel, lv_color_hex(0x33352D), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(panel, 10, LV_PART_MAIN);
+        lv_obj_set_style_border_width(panel, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(panel, 6, LV_PART_MAIN);
+        lv_obj_set_style_pad_column(panel, 8, LV_PART_MAIN);
+        lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+
+        lv_obj_t *accent = lv_obj_create(panel);
+        lv_obj_set_width(accent, 4);
+        lv_obj_set_height(accent, lv_pct(100));
+        lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(accent, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_border_width(accent, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(accent, 0, LV_PART_MAIN);
+
+        _list_rows[i].label = lv_label_create(panel);
         lv_obj_set_style_text_font(_list_rows[i].label, &lv_font_montserrat_16, LV_PART_MAIN);
         lv_obj_set_style_text_color(_list_rows[i].label, pet_theme::current()->comment, LV_PART_MAIN); // per-state color in refreshList
-        lv_obj_add_flag(_list_rows[i].label, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(_list_rows[i].label, LV_LABEL_LONG_WRAP); // long details wrap instead of clipping
+        lv_obj_set_flex_grow(_list_rows[i].label, 1);
+        _list_rows[i].panel = panel;
+        _list_rows[i].accent = accent;
         _list_rows[i].cache[0] = '\0';
     }
 
@@ -237,6 +276,8 @@ void AiCodingPet::destroyListUi(void)
     _list_empty = nullptr;
     for (int i = 0; i < PET_BRIDGE_MAX_SESSIONS; i++) {
         _list_rows[i].label = nullptr;
+        _list_rows[i].panel = nullptr;
+        _list_rows[i].accent = nullptr;
     }
     for (int i = 0; i < SCREEN_COUNT; i++) {
         if (_dots[i] != nullptr) {
@@ -279,7 +320,7 @@ void AiCodingPet::refreshList(void)
         }
         lv_obj_clear_flag(_list_empty, LV_OBJ_FLAG_HIDDEN);
         for (int i = 0; i < PET_BRIDGE_MAX_SESSIONS; i++) {
-            lv_obj_add_flag(_list_rows[i].label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(_list_rows[i].panel, LV_OBJ_FLAG_HIDDEN);
         }
         return;
     }
@@ -288,7 +329,7 @@ void AiCodingPet::refreshList(void)
 
     for (int i = 0; i < PET_BRIDGE_MAX_SESSIONS; i++) {
         if (i >= n) {
-            lv_obj_add_flag(_list_rows[i].label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(_list_rows[i].panel, LV_OBJ_FLAG_HIDDEN);
             continue;
         }
         const pet_bridge::SessionEntry &s = sess[i];
@@ -298,17 +339,24 @@ void AiCodingPet::refreshList(void)
         time_t t = (time_t)(s.updated_at_ms / 1000);
         struct tm ti;
         localtime_r(&t, &ti);
-        snprintf(text, sizeof(text), "%s  %.20s  %02d:%02d",
+        // Card row: title line (state + project + time) and a detail line
+        // with what the session is doing (prompt / tool + arg / hook event).
+        const char *detail = s.detail[0] ? s.detail : s.event;
+        snprintf(text, sizeof(text), "%s  %.18s  %02d:%02d\n  %.44s",
                  pet_render::stateName(s.state), s.basename[0] ? s.basename : "-",
-                 ti.tm_hour, ti.tm_min);
+                 ti.tm_hour, ti.tm_min,
+                 detail[0] ? detail : "(no detail)");
         bool changed = (strcmp(text, _list_rows[i].cache) != 0);
         if (changed) {
             snprintf(_list_rows[i].cache, sizeof(_list_rows[i].cache), "%s", text);
             ESP_UTILS_LOGI("list row %d/%d: %s", i + 1, n, text);
             lv_label_set_text(_list_rows[i].label, text);
-            lv_obj_set_style_text_color(_list_rows[i].label, pet_theme::current()->state[s.state], LV_PART_MAIN);
         }
-        lv_obj_clear_flag(_list_rows[i].label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(_list_rows[i].label,
+                                    pet_theme::current()->state[s.state], LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_list_rows[i].accent,
+                                  pet_theme::current()->state[s.state], LV_PART_MAIN);
+        lv_obj_clear_flag(_list_rows[i].panel, LV_OBJ_FLAG_HIDDEN);
     }
 }
 

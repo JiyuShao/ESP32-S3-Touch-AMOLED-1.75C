@@ -30,13 +30,34 @@ const EVENT_TO_STATE = {
   Stop: 'idle',
 };
 
-function postState(state, sessionId, event, basename) {
+/* One short line describing what the session is actually doing. */
+function detailOf(hook) {
+  const ev = hook.hook_event_name;
+  if (ev === 'UserPromptSubmit') {
+    const p = String(hook.prompt || '').replace(/\s+/g, ' ').trim();
+    return p.slice(0, 60);
+  }
+  if (ev === 'PreToolUse') {
+    const ti = hook.tool_input || {};
+    const arg = typeof ti.command === 'string' ? ti.command.split('\n')[0]
+      : typeof ti.file_path === 'string' ? ti.file_path
+      : typeof ti.path === 'string' ? ti.path : '';
+    return (String(hook.tool_name || 'tool') + (arg ? ': ' + arg : '')).slice(0, 60);
+  }
+  if (ev === 'PostToolUse') {
+    return hook.tool_name ? String(hook.tool_name) + ' (done)' : '';
+  }
+  return '';
+}
+
+function postState(state, sessionId, event, basename, detail) {
   const payload = JSON.stringify({
     version: 'v1',
     session_id: sessionId || 'default',
     state,
     event,
     basename,
+    detail,
     timestamp: Date.now(),
   });
   const req = http.request(
@@ -67,6 +88,6 @@ process.stdin.on('end', () => {
   const state = EVENT_TO_STATE[hook.hook_event_name];
   if (!state) return; // event we don't map (e.g. Notification) → skip
   const cwd = hook.cwd || '';
-  const basename = cwd.split('/').filter(Boolean).pop() || '';
-  postState(state, hook.session_id, hook.hook_event_name, basename);
+  const basename = cwd.split(/[\\/]/).filter(Boolean).pop() || '';
+  postState(state, hook.session_id, hook.hook_event_name, basename, detailOf(hook));
 });

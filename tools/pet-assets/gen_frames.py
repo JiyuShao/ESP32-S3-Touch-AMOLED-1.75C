@@ -133,7 +133,6 @@ def emit(im, out_dir):
         + ", ".join(intro_frames)
         + "}, .count = " + str(len(intro_frames)) + ", .loop = false };"
     )
-    c_lines.append("")
 
     h_lines.append('#include "pet_bridge.h"')
     h_lines.append('#include "lvgl.h"')
@@ -146,6 +145,7 @@ def emit(im, out_dir):
     h_lines.append("    const lv_image_dsc_t *frames[PET_MAX_FRAMES];")
     h_lines.append("    uint8_t count;")
     h_lines.append("    bool loop;")
+    h_lines.append("    uint32_t frame_ms; // 0 = renderer default (150 ms)")
     h_lines.append("} pet_state_anim_t;")
     h_lines.append("")
     h_lines.append("extern const pet_state_anim_t pet_anims[PET_STATE_COUNT];")

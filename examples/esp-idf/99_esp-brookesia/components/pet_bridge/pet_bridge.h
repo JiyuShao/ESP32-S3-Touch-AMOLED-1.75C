@@ -31,6 +31,8 @@ struct SessionEntry {
     AgentState state = PET_STATE_IDLE; // display-mapped (6-state vocabulary)
     uint64_t updated_at_ms = 0;        // bridge Date.now() ms — needs 64 bit
     int priority = 0;                  // Clawd priority, for sorting (error first)
+    char event[48] = {};               // last hook event (e.g. "PreToolUse:Write")
+    char detail[64] = {};              // what the session is doing (prompt/tool arg)
 };
 
 #define PET_BRIDGE_MAX_SESSIONS 8

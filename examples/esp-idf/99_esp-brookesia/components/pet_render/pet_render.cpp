@@ -25,8 +25,17 @@ const char *stateName(AgentState state)
 void PetRenderer::init(lv_obj_t *parent)
 {
     _image = lv_image_create(parent);
-    lv_obj_align(_image, LV_ALIGN_CENTER, 0, -20);
     lv_image_set_src(_image, pet_anims[PET_STATE_IDLE].frames[0]); // dimmed pet while disconnected
+    /* Align AFTER the source is set: with a NULL src the image widget is
+     * 0x0 and lv_obj_align would anchor it to (0,0) — off-center and
+     * clipped by the shell's bars. */
+    lv_obj_align(_image, LV_ALIGN_CENTER, 0, -20);
+    const lv_image_dsc_t *dsc = (const lv_image_dsc_t *)lv_image_get_src(_image);
+    ESP_UTILS_LOGD("img dsc %dx%d cf=%x, obj %dx%d@(%d,%d)",
+                   dsc ? dsc->header.w : -1, dsc ? dsc->header.h : -1,
+                   dsc ? dsc->header.cf : 0,
+                   lv_obj_get_width(_image), lv_obj_get_height(_image),
+                   lv_obj_get_x(_image), lv_obj_get_y(_image));
 
     // translucent dim over the pet while disconnected (created after image → on top)
     _overlay = lv_obj_create(parent);
@@ -175,6 +184,12 @@ void PetRenderer::applyVisibility(void)
 
 void PetRenderer::tick(uint32_t now_ms)
 {
+    if (!_layout_logged) {
+        _layout_logged = true;
+        ESP_UTILS_LOGD("after-layout img %dx%d@(%d,%d)",
+                       lv_obj_get_width(_image), lv_obj_get_height(_image),
+                       lv_obj_get_x(_image), lv_obj_get_y(_image));
+    }
     // blink the state indicators (never while the page is hidden)
     if (_visible && now_ms - _last_blink >= BLINK_MS) {
         _last_blink = now_ms;
@@ -197,7 +212,8 @@ void PetRenderer::tick(uint32_t now_ms)
 
     // waving intro plays first, one-shot, then falls back to the state row
     if (_intro_active) {
-        if (now_ms - _last_advance >= FRAME_MS) {
+        uint32_t intro_ms = pet_intro_anim.frame_ms ? pet_intro_anim.frame_ms : FRAME_MS;
+        if (now_ms - _last_advance >= intro_ms) {
             _last_advance = now_ms;
             _intro_frame++;
             if (_intro_frame >= pet_intro_anim.count) {
@@ -209,6 +225,7 @@ void PetRenderer::tick(uint32_t now_ms)
                 return;
             }
             lv_image_set_src(_image, pet_intro_anim.frames[_intro_frame]);
+            ESP_UTILS_LOGD("anim: intro frame %d/%d", _intro_frame, pet_intro_anim.count);
         }
         return;
     }
@@ -220,7 +237,8 @@ void PetRenderer::tick(uint32_t now_ms)
     if (anim.count <= 1) {
         return;
     }
-    if (now_ms - _last_advance < FRAME_MS) {
+    uint32_t anim_ms = anim.frame_ms ? anim.frame_ms : FRAME_MS;
+    if (now_ms - _last_advance < anim_ms) {
         return;
     }
     _last_advance = now_ms;
@@ -235,6 +253,8 @@ void PetRenderer::tick(uint32_t now_ms)
         }
     }
     lv_image_set_src(_image, anim.frames[_frame]);
+    ESP_UTILS_LOGD("anim: frame %d/%d (state=%s, %lums)", _frame, anim.count,
+                   STATE_LABELS[_state], (unsigned long)anim_ms);
 }
 
 } // namespace pet_render

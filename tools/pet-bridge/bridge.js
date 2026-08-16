@@ -73,6 +73,11 @@ function sessionRecord(id, s) {
     state: DISPLAY_STATE[s.payload.state] ?? 'idle',
     updated_at: s.updatedAt,
     priority: getStatePriority(s.payload.state),
+    event: typeof s.payload.event === 'string' ? s.payload.event.slice(0, 47) : '',
+    // Same sanitization contract as the permission hint: the board's
+    // extractString stops at quotes/backslashes, so strip them here.
+    detail: typeof s.lastDetail === 'string'
+      ? s.lastDetail.replace(/["\\\n\r\t]/g, ' ').slice(0, 59) : '',
   };
 }
 
@@ -272,7 +277,12 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      sessions.set(id, { payload: json, basename, updatedAt: now });
+      // Keep the last non-empty detail across events: idle events (Stop)
+      // carry no detail, and the row should keep showing what the session
+      // was last doing instead of blanking out.
+      const prevDetail = sessions.get(id)?.lastDetail || '';
+      const newDetail = typeof json.detail === 'string' && json.detail.trim() ? json.detail : prevDetail;
+      sessions.set(id, { payload: json, basename, updatedAt: now, lastDetail: newDetail });
       console.log(`[bridge] state: ${json.state} (session: ${id}, raw: ${json.state})`);
       broadcastMsg({
         version: 'v1',

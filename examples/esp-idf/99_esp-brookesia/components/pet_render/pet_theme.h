@@ -16,6 +16,7 @@
 namespace pet_theme {
 
 struct Theme {
+    lv_color_t bg;                      // app page background
     lv_color_t fg;                      // headings / primary text
     lv_color_t comment;                 // dim text (empty state, DISCONNECTED)
     lv_color_t dot_active;              // page dots
@@ -26,6 +27,7 @@ struct Theme {
 };
 
 inline const Theme kMonokai{
+    /* bg */        lv_color_hex(0x272822),
     /* fg */        lv_color_hex(0xF8F8F2),
     /* comment */   lv_color_hex(0x75715E),
     /* dot_active */    lv_color_hex(0xF8F8F2),

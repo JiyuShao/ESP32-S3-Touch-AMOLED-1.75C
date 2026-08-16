@@ -168,6 +168,7 @@ static int ws_parse_frames(ws_rx_t *rx, int fd)
     while (rx->len >= 2) {
         uint8_t opcode = (uint8_t)rx->data[0] & 0x0f;
         uint64_t payload_len = (uint8_t)rx->data[1] & 0x7f;
+        ESP_UTILS_LOGD("ws frame op=%02x len=%d buf=%d", opcode, (int)payload_len, rx->len);
         int header_len = 2;
         if (payload_len == 126) {
             if (rx->len < 4) {
@@ -198,7 +199,13 @@ static int ws_parse_frames(ws_rx_t *rx, int fd)
 
         char *payload = rx->data + header_len;
         if (opcode == 0x1) { // text
-            payload[payload_len] = '\0';
+            /* NOTE: never write a NUL terminator into rx->data here — when
+             * several frames share the buffer, payload[payload_len] is the
+             * FIRST BYTE OF THE NEXT FRAME and zeroing it corrupts that
+             * frame's opcode (0x81 → 0x00, silently dropped as a
+             * continuation). All downstream parsing is length-bounded. */
+            ESP_UTILS_LOGD("ws rx %d B: %.*s", (int)payload_len,
+                           (int)(payload_len > 60 ? 60 : payload_len), payload);
             if (s_cb) {
                 s_cb(payload, (int)payload_len, s_cb_user);
             }
@@ -370,7 +377,14 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
     s_stop = false;
     s_task_exited = false;
 
-    if (xTaskCreate(ws_client_task, "ws_client", 6144, NULL, 5, &s_task) != pdPASS) {
+    /* Priority must beat the LVGL task (prio 6): the SW renderer can hog the
+     * CPU for seconds per frame, starving a low-priority recv loop — display
+     * pushes then queue in the socket and apply late/out of window (the demo
+     * lost the whole attention state to this). It must stay BELOW lwIP's
+     * TCP/IP task (prio 18): at 22 we preempted the TCP stack itself and the
+     * connect never completed. The task blocks on recv() almost always, so
+     * the elevated priority costs nothing when idle. */
+    if (xTaskCreate(ws_client_task, "ws_client", 8192, NULL, 12, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

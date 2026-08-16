@@ -1,6 +1,7 @@
 #include "pet_bridge.h"
 
 #include <cstring>
+#include "esp_log.h"
 
 namespace pet_bridge {
 
@@ -176,6 +177,7 @@ bool PetBridge::applyDisplayState(const char *payload, int len, uint32_t now_ms)
     if (!parseState(state_str, strlen(state_str), &state)) {
         return false;
     }
+    ESP_LOGD("pet_bridge", "disp-msg: %s", state_str);
 
     // session_id is optional; keep the last known one if absent
     char session[sizeof(_status.session_id)];
@@ -284,6 +286,12 @@ bool PetBridge::applySessionState(const char *payload, int len, uint32_t now_ms)
     v = 0;
     if (extractUint64(payload, len, "priority", &v)) {
         e.priority = (int)v;
+    }
+    if (!extractString(payload, len, "event", e.event, sizeof(e.event))) {
+        e.event[0] = '\0';
+    }
+    if (!extractString(payload, len, "detail", e.detail, sizeof(e.detail))) {
+        e.detail[0] = '\0';
     }
     insertSorted(e);
     return true;

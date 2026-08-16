@@ -134,6 +134,20 @@ extern "C" void app_main(void)
         ESP_UTILS_CHECK_FALSE_EXIT(phone->initAppFromRegistry(inited_apps), "Init app registry failed");
         ESP_UTILS_CHECK_FALSE_EXIT(phone->installAppFromRegistry(inited_apps), "Install app registry failed");
 
+        /* The board is a pet device first: auto-launch the AI Coding Pet
+         * app on boot so it connects to the PC Bridge without any taps. */
+        for (const auto &app_info : inited_apps) {
+            if (std::get<0>(app_info) == "AI Coding Pet") {
+                systems::base::Context::AppEventData start_event = {
+                    .id = std::get<1>(app_info)->getId(),
+                    .type = systems::base::Context::AppEventType::START,
+                };
+                ESP_UTILS_CHECK_FALSE_EXIT(phone->sendAppEvent(&start_event),
+                                           "Auto-launch AI Coding Pet failed");
+                break;
+            }
+        }
+
         /* Create a timer to update the clock */
         lv_timer_create([](lv_timer_t *t) {
             time_t now;
