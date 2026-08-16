@@ -28,14 +28,14 @@
 
 #define RX_BUF_SIZE 2048
 
-static TaskHandle_t s_task = nullptr;
+static TaskHandle_t s_task = NULL;
 static volatile bool s_stop = false;
 static volatile bool s_task_exited = false; // set by the task right before vTaskDelete
 static volatile int s_fd = -1; // live socket, closed by stop() to unblock recv
-static SemaphoreHandle_t s_tx_mutex = nullptr; // guards writes: task (pong/close) vs UI task (send_text)
-static ws_client_msg_cb_t s_cb = nullptr;
-static ws_client_status_cb_t s_status_cb = nullptr;
-static void *s_cb_user = nullptr;
+static SemaphoreHandle_t s_tx_mutex = NULL; // guards writes: task (pong/close) vs UI task (send_text)
+static ws_client_msg_cb_t s_cb = NULL;
+static ws_client_status_cb_t s_status_cb = NULL;
+static void *s_cb_user = NULL;
 static char s_ip[32];
 static uint16_t s_port;
 static char s_path[64];
@@ -106,7 +106,7 @@ static int connect_with_timeout(const char *ip, uint16_t port, int timeout_ms)
         FD_ZERO(&wfds);
         FD_SET(fd, &wfds);
         struct timeval ptv = { .tv_sec = 0, .tv_usec = 100000 };
-        int sel = select(fd + 1, nullptr, &wfds, nullptr, &ptv);
+        int sel = select(fd + 1, NULL, &wfds, NULL, &ptv);
         if (sel > 0) {
             int sock_err = 0;
             socklen_t sock_err_len = sizeof(sock_err);
@@ -147,7 +147,7 @@ static int read_until_headers_end(int fd, char *buf, int cap, int *header_end)
         total += n;
         buf[total] = '\0';
         const char *end = strstr(buf, "\r\n\r\n");
-        if (end != nullptr) {
+        if (end != NULL) {
             *header_end = (int)(end - buf) + 4;
             return total;
         }
@@ -262,7 +262,7 @@ static void ws_client_task(void *arg)
         char resp[512];
         int header_end = 0;
         int resp_len = read_until_headers_end(fd, resp, sizeof(resp), &header_end);
-        if (resp_len < 0 || strstr(resp, "101") == nullptr) {
+        if (resp_len < 0 || strstr(resp, "101") == NULL) {
             ESP_UTILS_LOGW("Handshake rejected: %.100s", resp);
             close(fd);
             goto retry_wait;
@@ -315,12 +315,12 @@ retry_wait:
         }
     }
     s_task_exited = true;
-    vTaskDelete(nullptr);
+    vTaskDelete(NULL);
 }
 
 esp_err_t ws_client_send_text(const char *text)
 {
-    if (text == nullptr) {
+    if (text == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     size_t len = strlen(text);
@@ -352,12 +352,12 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
                           ws_client_msg_cb_t cb, ws_client_status_cb_t status_cb,
                           void *user_data)
 {
-    if (s_task != nullptr) {
+    if (s_task != NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (s_tx_mutex == nullptr) {
+    if (s_tx_mutex == NULL) {
         s_tx_mutex = xSemaphoreCreateMutex();
-        if (s_tx_mutex == nullptr) {
+        if (s_tx_mutex == NULL) {
             return ESP_ERR_NO_MEM;
         }
     }
@@ -370,7 +370,7 @@ esp_err_t ws_client_start(const char *ip, uint16_t port, const char *path,
     s_stop = false;
     s_task_exited = false;
 
-    if (xTaskCreate(ws_client_task, "ws_client", 6144, nullptr, 5, &s_task) != pdPASS) {
+    if (xTaskCreate(ws_client_task, "ws_client", 6144, NULL, 5, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
@@ -383,12 +383,12 @@ void ws_client_stop(void)
         close(s_fd); // unblocks recv in the task
         s_fd = -1;
     }
-    if (s_task != nullptr) {
+    if (s_task != NULL) {
         // Wait for the task to exit before clearing the handle so a later
         // start() can't spawn a second task while this one still lingers.
         for (int i = 0; i < 40 && !s_task_exited; i++) {
             vTaskDelay(pdMS_TO_TICKS(50)); // up to 2 s (bounded by connect poll)
         }
-        s_task = nullptr;
+        s_task = NULL;
     }
 }
